@@ -1,5 +1,7 @@
 from fastapi import FastAPI
+
 from app.api.router import api_router
+from app.core.openapi import configure_openapi
 
 app = FastAPI(
     title="WOOWANGTHON API",
@@ -7,6 +9,7 @@ app = FastAPI(
 )
 
 app.include_router(api_router, prefix="/api/v1")
+configure_openapi(app)
 
 
 @app.get("/", tags=["root"])
