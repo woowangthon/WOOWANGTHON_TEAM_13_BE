@@ -102,3 +102,23 @@ CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 
 브라우저에서 `Authorization: Bearer <SUPABASE_ACCESS_TOKEN>` 헤더를 포함한
 요청과 CORS 사전 요청(`OPTIONS`)을 허용합니다.
+
+## 사용자 정보 API
+
+사용자 정보 API는 모두 Supabase access token이 필요합니다. 첫
+`GET /api/v1/users/me` 요청에서 JWT의 `sub`와 연결되는 애플리케이션 사용자가
+없으면 자동으로 생성합니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/api/v1/users/me` | 내 정보 조회 및 최초 사용자 생성 |
+| `PATCH` | `/api/v1/users/me` | 닉네임 수정 |
+| `DELETE` | `/api/v1/users/me` | 회원 탈퇴(프로필 삭제 및 재생성 방지) |
+| `GET` | `/api/v1/users/me/stores` | 내 소속 매장 목록 조회 |
+
+DB 스키마를 반영한 뒤 서버를 실행합니다.
+
+```bash
+alembic upgrade head
+uvicorn app.app:app --reload
+```
