@@ -122,3 +122,20 @@ DB 스키마를 반영한 뒤 서버를 실행합니다.
 alembic upgrade head
 uvicorn app.app:app --reload
 ```
+
+## 매장 API
+
+매장 API는 모두 Supabase access token이 필요하며, 현재 로그인한 사용자가
+소유한 매장만 조회·수정·삭제할 수 있습니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/v1/stores` | 매장 등록 |
+| `GET` | `/api/v1/stores` | 내가 소유한 매장 목록 조회 |
+| `GET` | `/api/v1/stores/{storeId}` | 매장 상세 조회 |
+| `PATCH` | `/api/v1/stores/{storeId}` | 매장 정보 수정 |
+| `DELETE` | `/api/v1/stores/{storeId}` | 매장 삭제 |
+
+사업자 인증 기능이 구현되기 전까지 `businessVerificationId`는 선택값이며,
+별도의 인증 완료 여부 검증은 수행하지 않습니다. 매장 대표 이미지는
+`photoUrl`로 등록하거나 수정할 수 있습니다.
