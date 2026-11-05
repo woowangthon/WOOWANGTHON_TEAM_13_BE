@@ -6,11 +6,9 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_active_user
-from app.core.config import settings
+from app.api.dependencies import get_active_user, get_llm_client
 from app.db.session import get_db
-from app.integrations.gemini import GeminiClient
-from app.integrations.llm import LLMError
+from app.integrations.llm import LLMClient, LLMError
 from app.models.assistant_chat import AssistantChat, AssistantMessage
 from app.models.user import User
 from app.repositories.assistant_chat import AssistantChatRepository
@@ -43,6 +41,7 @@ router = APIRouter(
 
 def get_assistant_chat_service(
     session: Annotated[AsyncSession, Depends(get_db)],
+    llm: Annotated[LLMClient, Depends(get_llm_client)],
 ) -> AssistantChatService:
     """요청에 사용할 AI 사수 서비스를 생성합니다."""
     return AssistantChatService(
@@ -50,11 +49,7 @@ def get_assistant_chat_service(
         ManualRepository(session),
         RecipeRepository(session),
         StoreAccessService(StoreRepository(session)),
-        GeminiClient(
-            api_key=settings.gemini_api_key,
-            model=settings.gemini_model,
-            timeout_seconds=settings.llm_timeout_seconds,
-        ),
+        llm,
     )
 
 

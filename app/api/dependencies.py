@@ -4,8 +4,20 @@ from fastapi import Depends, HTTPException, status
 
 from app.api.v1.users import get_user_service
 from app.core.auth import AuthenticatedUser, get_current_user
+from app.core.config import settings
+from app.integrations.gemini import GeminiClient
+from app.integrations.llm import LLMClient
 from app.models.user import User
 from app.services.user import InactiveUserError, UserService
+
+
+def get_llm_client() -> LLMClient:
+    """요청에 사용할 LLM 클라이언트를 생성합니다."""
+    return GeminiClient(
+        api_key=settings.gemini_api_key,
+        model=settings.gemini_model,
+        timeout_seconds=settings.llm_timeout_seconds,
+    )
 
 
 async def get_active_user(
