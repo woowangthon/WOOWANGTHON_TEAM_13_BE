@@ -188,3 +188,19 @@ AI 사수는 현재 매장의 매뉴얼과 레시피만 근거로 답합니다. 
 | `DELETE` | `/api/v1/stores/{storeId}/assistant-chats/{chatId}` | 채팅방 삭제 |
 | `POST` | `/api/v1/stores/{storeId}/assistant-chats/{chatId}/messages` | 질문 전송과 답변 |
 | `GET` | `/api/v1/stores/{storeId}/assistant-chats/{chatId}/messages` | 메시지 내역 조회 |
+
+## 인수인계 API
+
+인수인계 API는 모두 Supabase access token이 필요합니다. AI 초안은 저장되지 않고,
+사용자가 확인한 내용만 등록 API로 저장합니다. 수정·삭제는 작성자나 사장님만 할 수
+있습니다. `date`를 생략하면 한국 시간 기준 오늘을 조회합니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/v1/stores/{storeId}/handover-drafts` | AI 체크리스트 초안 생성 |
+| `POST` | `/api/v1/stores/{storeId}/handover-notes` | 인수인계 등록 |
+| `GET` | `/api/v1/stores/{storeId}/handover-notes` | 날짜별 목록 조회 |
+| `GET` | `/api/v1/stores/{storeId}/handover-notes/{noteId}` | 상세 조회 |
+| `PATCH` | `/api/v1/stores/{storeId}/handover-notes/{noteId}` | 수정 |
+| `DELETE` | `/api/v1/stores/{storeId}/handover-notes/{noteId}` | 삭제 |
+| `POST` | `/api/v1/stores/{storeId}/handover-notes/{noteId}/confirmations` | 항목 또는 노트 전체 체크 |
