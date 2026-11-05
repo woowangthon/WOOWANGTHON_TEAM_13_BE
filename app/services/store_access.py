@@ -13,6 +13,12 @@ class StoreLookupProtocol(Protocol):
     ) -> Store | None: ...
 
 
+class StoreAccessProtocol(Protocol):
+    async def ensure_owner(self, store_id: UUID, user_id: UUID) -> None: ...
+
+    async def ensure_member(self, store_id: UUID, user_id: UUID) -> None: ...
+
+
 class StoreAccessService:
     def __init__(self, store_repository: StoreLookupProtocol) -> None:
         """매장 권한 판단에 사용할 저장소를 받습니다."""

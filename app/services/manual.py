@@ -10,6 +10,7 @@ from app.schemas.manual import (
     ManualCreateRequest,
     ManualUpdateRequest,
 )
+from app.services.store_access import StoreAccessProtocol
 
 
 class ManualNotFoundError(Exception):
@@ -90,12 +91,6 @@ class ManualRepositoryProtocol(Protocol):
     ) -> Manual | None: ...
 
     async def save(self, manual: Manual) -> Manual: ...
-
-
-class StoreAccessProtocol(Protocol):
-    async def ensure_owner(self, store_id: UUID, user_id: UUID) -> None: ...
-
-    async def ensure_member(self, store_id: UUID, user_id: UUID) -> None: ...
 
 
 class ManualService:
