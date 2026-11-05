@@ -158,3 +158,19 @@ uvicorn app.app:app --reload
 
 매뉴얼 등록은 `multipart/form-data`이며 `manual` 파트에 JSON을 담습니다. 파일
 저장소가 정해지기 전까지 `files` 파트를 보내면 `501`을 반환합니다.
+
+## 레시피 API
+
+레시피 API는 모두 Supabase access token이 필요합니다. 등록·수정·삭제는 매장
+소유자만 할 수 있습니다. 멤버십 구현 전까지는 조회도 매장 소유자만 가능합니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/v1/stores/{storeId}/recipes` | 레시피 등록 |
+| `GET` | `/api/v1/stores/{storeId}/recipes` | 레시피 목록과 카테고리 조회 |
+| `GET` | `/api/v1/stores/{storeId}/recipes/{recipeId}` | 레시피 상세 조회 |
+| `PATCH` | `/api/v1/stores/{storeId}/recipes/{recipeId}` | 레시피 수정 |
+| `DELETE` | `/api/v1/stores/{storeId}/recipes/{recipeId}` | 레시피 삭제 |
+
+레시피 등록은 `multipart/form-data`이며 `recipe` 파트에 JSON을 담습니다. 파일
+저장소가 정해지기 전까지 `images` 파트를 보내면 `501`을 반환합니다.
