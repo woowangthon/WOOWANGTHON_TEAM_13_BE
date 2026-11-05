@@ -67,3 +67,38 @@ chore: FastAPI 의존성 추가
 - 타입 뒤에 콜론과 공백을 넣습니다.
 - 변경 내용을 짧고 명확하게 작성합니다.
 - 하나의 커밋에는 하나의 논리적인 변경만 포함합니다.
+
+## Supabase JWT 인증 확인
+
+백엔드는 Google·Kakao 공급자의 토큰이 아니라 Supabase 로그인 세션의
+`access_token`을 검증합니다. 프론트엔드는 인증이 필요한 API를 호출할 때
+다음 헤더를 전달해야 합니다.
+
+```http
+Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
+```
+
+로컬 서버를 실행한 뒤 `http://localhost:8000/docs`에서 `Authorize`를 눌러
+Supabase access token을 입력하면 보호된 API를 테스트할 수 있습니다.
+
+```bash
+uvicorn app.app:app --reload
+```
+
+JWT 검증은 Supabase JWKS 공개키를 사용하며 서명, 발급자(`iss`),
+대상(`aud`), 만료 시간(`exp`), 사용자 식별자(`sub`)를 확인합니다.
+토큰이 없거나 검증에 실패하면 `401 Unauthorized`와
+`WWW-Authenticate: Bearer` 헤더를 반환합니다.
+
+## 로컬 프론트엔드 연동
+
+로컬 백엔드 기본 주소는 `http://localhost:8000`이며, 기본 CORS 허용
+주소는 Vite 개발 서버인 `http://localhost:5173`입니다. 다른 프론트엔드
+주소를 함께 허용하려면 `.env`의 `CORS_ORIGINS`에 쉼표로 구분해 추가합니다.
+
+```dotenv
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+```
+
+브라우저에서 `Authorization: Bearer <SUPABASE_ACCESS_TOKEN>` 헤더를 포함한
+요청과 CORS 사전 요청(`OPTIONS`)을 허용합니다.
