@@ -204,3 +204,17 @@ uvicorn app.app:app --reload
 
 레시피 등록은 `multipart/form-data`이며 `recipe` 파트에 JSON을 담습니다. 파일
 저장소가 정해지기 전까지 `images` 파트를 보내면 `501`을 반환합니다.
+
+## AI 사수 채팅 API
+
+AI 사수는 현재 매장의 매뉴얼과 레시피만 근거로 답합니다. 근거가 없으면 고정 안내문을
+반환하고, LLM 호출에 실패하면 `503`을 반환합니다. 실행하려면 `.env`에
+`GEMINI_API_KEY`가 필요합니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/v1/stores/{storeId}/assistant-chats` | 채팅방 생성 |
+| `GET` | `/api/v1/stores/{storeId}/assistant-chats` | 내 채팅방 목록 조회 |
+| `DELETE` | `/api/v1/stores/{storeId}/assistant-chats/{chatId}` | 채팅방 삭제 |
+| `POST` | `/api/v1/stores/{storeId}/assistant-chats/{chatId}/messages` | 질문 전송과 답변 |
+| `GET` | `/api/v1/stores/{storeId}/assistant-chats/{chatId}/messages` | 메시지 내역 조회 |

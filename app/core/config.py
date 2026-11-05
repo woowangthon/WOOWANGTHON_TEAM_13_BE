@@ -13,6 +13,10 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:5173"
 
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.5-flash-lite"
+    llm_timeout_seconds: float = 20
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
