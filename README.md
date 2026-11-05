@@ -139,3 +139,22 @@ uvicorn app.app:app --reload
 사업자 인증 기능이 구현되기 전까지 `businessVerificationId`는 선택값이며,
 별도의 인증 완료 여부 검증은 수행하지 않습니다. 매장 대표 이미지는
 `photoUrl`로 등록하거나 수정할 수 있습니다.
+
+## 매뉴얼 API
+
+매뉴얼 API는 모두 Supabase access token이 필요합니다. 등록·수정·삭제와 카테고리
+생성, 종류 추천은 매장 소유자만 할 수 있습니다. 멤버십 구현 전까지는 조회도
+매장 소유자만 가능합니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/v1/stores/{storeId}/manual-categories` | 매뉴얼 카테고리 생성 |
+| `POST` | `/api/v1/stores/{storeId}/manuals/recommendations` | 매뉴얼 종류 추천 |
+| `POST` | `/api/v1/stores/{storeId}/manuals` | 매뉴얼 등록 |
+| `GET` | `/api/v1/stores/{storeId}/manuals` | 매뉴얼 목록 조회 |
+| `GET` | `/api/v1/stores/{storeId}/manuals/{manualId}` | 매뉴얼 상세 조회 |
+| `PATCH` | `/api/v1/stores/{storeId}/manuals/{manualId}` | 매뉴얼 수정 |
+| `DELETE` | `/api/v1/stores/{storeId}/manuals/{manualId}` | 매뉴얼 삭제 |
+
+매뉴얼 등록은 `multipart/form-data`이며 `manual` 파트에 JSON을 담습니다. 파일
+저장소가 정해지기 전까지 `files` 파트를 보내면 `501`을 반환합니다.
