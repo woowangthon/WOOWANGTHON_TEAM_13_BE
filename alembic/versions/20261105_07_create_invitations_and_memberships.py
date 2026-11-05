@@ -1,7 +1,7 @@
 """create invitations and memberships
 
 Revision ID: 20261105_07
-Revises: 20261105_05
+Revises: 20261105_06
 Create Date: 2026-11-05
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "20261105_07"
-down_revision: str | None = "20261105_05"
+down_revision: str | None = "20261105_06"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

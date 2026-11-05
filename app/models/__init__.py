@@ -1,6 +1,7 @@
 """SQLAlchemy models."""
 
 from app.models.assistant_chat import AssistantChat, AssistantMessage
+from app.models.handover import HandoverItem, HandoverNote
 from app.models.invitation import Invitation, InvitationAttempt
 from app.models.manual import Manual, ManualCategory
 from app.models.membership import Membership
@@ -11,6 +12,8 @@ from app.models.user import User
 __all__ = [
     "AssistantChat",
     "AssistantMessage",
+    "HandoverItem",
+    "HandoverNote",
     "Invitation",
     "InvitationAttempt",
     "Manual",
