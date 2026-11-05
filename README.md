@@ -103,6 +103,36 @@ CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 브라우저에서 `Authorization: Bearer <SUPABASE_ACCESS_TOKEN>` 헤더를 포함한
 요청과 CORS 사전 요청(`OPTIONS`)을 허용합니다.
 
+## 초대 코드와 매장 가입
+
+사장님은 자신이 소유한 매장에 직원 이름과 2026년 최저시급 이상의 시급을
+지정해 6자리 초대 코드를 발급할 수 있습니다. 코드는 `0`, `O`, `1`, `I`를
+제외한 영문 대문자와 숫자로 구성됩니다.
+
+```http
+POST /api/v1/stores/{storeId}/invitations
+Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
+Content-Type: application/json
+
+{
+  "staffName": "지은",
+  "hourlyWage": 10320
+}
+```
+
+직원은 로그인 후 코드를 확인하고 가입합니다.
+
+```http
+POST /api/v1/invitations/verify
+POST /api/v1/memberships/join
+
+{ "code": "K7P2QX" }
+```
+
+잘못된 코드를 5회 입력하면 해당 사용자의 코드 확인을 10분 동안 잠급니다.
+가입이 완료되면 `GET /api/v1/users/me`와 `GET /api/v1/users/me/stores`에서
+실제 소유·직원 매장 목록을 반환합니다.
+
 ## 사용자 정보 API
 
 사용자 정보 API는 모두 Supabase access token이 필요합니다. 첫

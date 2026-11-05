@@ -6,8 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.db.session import get_db
 from app.models.user import User
+from app.repositories.membership import MembershipRepository
 from app.repositories.user import UserRepository
 from app.schemas.user import StoreSummary, UserResponse, UserUpdateRequest
+from app.services.membership import MembershipService
 from app.services.user import InactiveUserError, UserService
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -20,15 +22,21 @@ def get_user_service(
     return UserService(UserRepository(session))
 
 
-def _to_response(user: User) -> UserResponse:
+def get_membership_service(
+    session: Annotated[AsyncSession, Depends(get_db)],
+) -> MembershipService:
+    """요청에 사용할 멤버십 서비스를 생성합니다."""
+    return MembershipService(MembershipRepository(session))
+
+
+def _to_response(user: User, stores: list[StoreSummary]) -> UserResponse:
     """사용자 모델을 API 응답 형식으로 변환합니다."""
     return UserResponse(
         user_id=user.id,
         nickname=user.nickname,
         email=user.email,
         provider=user.provider,
-        # TODO: 매장/멤버십 구현 후 실제 소속 매장 목록으로 교체합니다.
-        stores=[],
+        stores=stores,
     )
 
 
@@ -50,10 +58,15 @@ async def _get_or_create_active_user(
 async def get_my_profile(
     identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
     service: Annotated[UserService, Depends(get_user_service)],
+    membership_service: Annotated[
+        MembershipService,
+        Depends(get_membership_service),
+    ],
 ) -> UserResponse:
     """현재 로그인한 사용자의 정보를 조회합니다."""
     user = await _get_or_create_active_user(service, identity)
-    return _to_response(user)
+    stores = await membership_service.list_store_summaries(user.id)
+    return _to_response(user, stores)
 
 
 @router.patch("/me", response_model=UserResponse)
@@ -61,6 +74,10 @@ async def update_my_profile(
     request: UserUpdateRequest,
     identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
     service: Annotated[UserService, Depends(get_user_service)],
+    membership_service: Annotated[
+        MembershipService,
+        Depends(get_membership_service),
+    ],
 ) -> UserResponse:
     """현재 로그인한 사용자의 닉네임을 수정합니다."""
     try:
@@ -70,7 +87,8 @@ async def update_my_profile(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Withdrawn user account",
         ) from None
-    return _to_response(user)
+    stores = await membership_service.list_store_summaries(user.id)
+    return _to_response(user, stores)
 
 
 @router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
@@ -87,8 +105,11 @@ async def withdraw_my_account(
 async def get_my_stores(
     identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
     service: Annotated[UserService, Depends(get_user_service)],
+    membership_service: Annotated[
+        MembershipService,
+        Depends(get_membership_service),
+    ],
 ) -> list[StoreSummary]:
     """현재 사용자가 소속된 매장 목록을 조회합니다."""
-    await _get_or_create_active_user(service, identity)
-    # TODO: 매장/멤버십 구현 후 실제 소속 매장 목록으로 교체합니다.
-    return []
+    user = await _get_or_create_active_user(service, identity)
+    return await membership_service.list_store_summaries(user.id)

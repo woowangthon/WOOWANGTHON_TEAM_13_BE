@@ -2,7 +2,9 @@
 
 from app.models.assistant_chat import AssistantChat, AssistantMessage
 from app.models.handover import HandoverItem, HandoverNote
+from app.models.invitation import Invitation, InvitationAttempt
 from app.models.manual import Manual, ManualCategory
+from app.models.membership import Membership
 from app.models.recipe import Recipe
 from app.models.store import Store
 from app.models.user import User
@@ -12,8 +14,11 @@ __all__ = [
     "AssistantMessage",
     "HandoverItem",
     "HandoverNote",
+    "Invitation",
+    "InvitationAttempt",
     "Manual",
     "ManualCategory",
+    "Membership",
     "Recipe",
     "Store",
     "User",
