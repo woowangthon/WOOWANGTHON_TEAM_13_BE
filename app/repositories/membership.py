@@ -1,11 +1,10 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.invitation import Invitation
 from app.models.membership import Membership
 from app.models.store import Store
 
@@ -68,17 +67,6 @@ class MembershipRepository:
     ) -> Membership:
         membership.left_at = left_at
         self._session.add(membership)
-        revoke_unused_invitations = (
-            update(Invitation)
-            .where(
-                Invitation.store_id == membership.store_id,
-                Invitation.staff_name == membership.staff_name,
-                Invitation.accepted_at.is_(None),
-                Invitation.revoked_at.is_(None),
-            )
-            .values(revoked_at=left_at)
-        )
-        await self._session.execute(revoke_unused_invitations)
         try:
             await self._session.commit()
         except SQLAlchemyError:

@@ -167,6 +167,44 @@ class StoreIdExpiresAfterRollback:
         return self._store_id
 
 
+class StoreExpiresAfterRollback:
+    def __init__(self, store: Store) -> None:
+        self._store_id = store.id
+        self._name = store.name
+        self.owner_id = store.owner_id
+        self.deleted_at = store.deleted_at
+        self.expired = False
+
+    @property
+    def id(self) -> UUID:
+        if self.expired:
+            raise RuntimeError("store id was expired by rollback")
+        return self._store_id
+
+    @property
+    def name(self) -> str:
+        if self.expired:
+            raise RuntimeError("store name was expired by rollback")
+        return self._name
+
+
+class ConcurrentJoinRepository(FakeInvitationRepository):
+    async def accept(
+        self,
+        invitation: Invitation,
+        membership: Membership,
+    ) -> Membership | None:
+        self.membership = membership
+        if self.context is not None:
+            store = cast(StoreExpiresAfterRollback, self.context[1])
+            store.expired = True
+        raise IntegrityError(
+            "INSERT INTO memberships",
+            {},
+            RuntimeError("duplicate active membership"),
+        )
+
+
 def make_context() -> tuple[Invitation, Store, User]:
     owner = User(
         id=uuid4(),
@@ -347,6 +385,21 @@ async def test_join_rejects_invitation_consumed_by_concurrent_request() -> None:
 
     with pytest.raises(InvitationRevokedError):
         await InvitationService(repository).join("K7P2QX", uuid4())
+
+
+@pytest.mark.asyncio
+async def test_join_uses_cached_store_details_after_accept_rollback() -> None:
+    invitation, store, owner = make_context()
+    expiring_store = StoreExpiresAfterRollback(store)
+    context = (invitation, cast(Store, expiring_store), owner)
+    repository = ConcurrentJoinRepository(context)
+    user_id = uuid4()
+
+    with pytest.raises(InvitationAlreadyJoinedError) as exc_info:
+        await InvitationService(repository).join("K7P2QX", user_id)
+
+    assert exc_info.value.store_id == store.id
+    assert exc_info.value.store_name == store.name
 
 
 @pytest.mark.asyncio

@@ -218,46 +218,52 @@ class InvitationService:
     async def join(self, code: str, user_id: UUID) -> tuple[Membership, Store]:
         """유효한 초대 코드를 사용해 직원 멤버십을 생성합니다."""
         verified = await self.verify(code, user_id)
+        store = verified.store
+        invitation = verified.invitation
+        store_id = store.id
+        store_name = store.name
+        staff_name = invitation.staff_name
+        hourly_wage = invitation.hourly_wage
         now = datetime.now(UTC)
         membership = await self._repository.get_membership(
-            verified.store.id,
+            store_id,
             user_id,
         )
         if membership is None:
             membership = Membership(
                 id=uuid4(),
-                store_id=verified.store.id,
+                store_id=store_id,
                 user_id=user_id,
                 role="staff",
-                staff_name=verified.invitation.staff_name,
-                hourly_wage=verified.invitation.hourly_wage,
+                staff_name=staff_name,
+                hourly_wage=hourly_wage,
                 joined_at=now,
             )
         else:
             membership.role = "staff"
-            membership.staff_name = verified.invitation.staff_name
-            membership.hourly_wage = verified.invitation.hourly_wage
+            membership.staff_name = staff_name
+            membership.hourly_wage = hourly_wage
             membership.joined_at = now
             membership.left_at = None
         try:
             saved = await self._repository.accept(
-                verified.invitation,
+                invitation,
                 membership,
             )
         except IntegrityError:
             existing = await self._repository.get_active_membership(
-                verified.store.id,
+                store_id,
                 user_id,
             )
             if existing is not None:
                 raise InvitationAlreadyJoinedError(
-                    verified.store.id,
-                    verified.store.name,
+                    store_id,
+                    store_name,
                 ) from None
             raise
         if saved is None:
             raise InvitationRevokedError
-        return saved, verified.store
+        return saved, store
 
     async def revoke(self, store_id: UUID, invitation_id: UUID) -> None:
         """소유자 매장의 초대 코드를 즉시 사용할 수 없게 합니다."""
