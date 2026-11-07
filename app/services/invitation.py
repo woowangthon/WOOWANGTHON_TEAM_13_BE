@@ -77,7 +77,7 @@ class InvitationRepositoryProtocol(Protocol):
         self,
         invitation: Invitation,
         membership: Membership,
-    ) -> Membership: ...
+    ) -> Membership | None: ...
 
     async def save(self, invitation: Invitation) -> Invitation: ...
 
@@ -173,8 +173,6 @@ class InvitationService:
             hourly_wage=verified.invitation.hourly_wage,
             joined_at=now,
         )
-        verified.invitation.accepted_at = now
-        verified.invitation.accepted_by_user_id = user_id
         try:
             saved = await self._repository.accept(
                 verified.invitation,
@@ -191,6 +189,8 @@ class InvitationService:
                     verified.store.name,
                 ) from None
             raise
+        if saved is None:
+            raise InvitationRevokedError
         return saved, verified.store
 
     async def revoke(self, store_id: UUID, invitation_id: UUID) -> None:

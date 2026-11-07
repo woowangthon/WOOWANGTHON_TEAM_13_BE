@@ -28,6 +28,7 @@ class FakeInvitationRepository:
         self.membership: Membership | None = None
         self.attempts: dict[UUID, InvitationAttempt] = {}
         self.created: list[Invitation] = []
+        self.consume_succeeds = True
 
     async def create(self, invitation: Invitation) -> Invitation:
         invitation.id = uuid4()
@@ -73,7 +74,11 @@ class FakeInvitationRepository:
         self,
         invitation: Invitation,
         membership: Membership,
-    ) -> Membership:
+    ) -> Membership | None:
+        if not self.consume_succeeds:
+            return None
+        invitation.accepted_at = membership.joined_at
+        invitation.accepted_by_user_id = membership.user_id
         self.membership = membership
         return membership
 
@@ -207,6 +212,16 @@ async def test_join_creates_membership_and_consumes_invitation() -> None:
     assert membership.hourly_wage == 10_320
     assert context[0].accepted_by_user_id == user_id
     assert context[0].accepted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_join_rejects_invitation_consumed_by_concurrent_request() -> None:
+    context = make_context()
+    repository = FakeInvitationRepository(context)
+    repository.consume_succeeds = False
+
+    with pytest.raises(InvitationRevokedError):
+        await InvitationService(repository).join("K7P2QX", uuid4())
 
 
 @pytest.mark.asyncio

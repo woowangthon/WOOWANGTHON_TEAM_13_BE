@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,8 +68,26 @@ class InvitationRepository:
         self,
         invitation: Invitation,
         membership: Membership,
-    ) -> Membership:
-        self._session.add(invitation)
+    ) -> Membership | None:
+        consume_query = (
+            update(Invitation)
+            .where(
+                Invitation.id == invitation.id,
+                Invitation.revoked_at.is_(None),
+                Invitation.accepted_at.is_(None),
+            )
+            .values(
+                accepted_at=membership.joined_at,
+                accepted_by_user_id=membership.user_id,
+            )
+            .returning(Invitation.id)
+            .execution_options(synchronize_session=False)
+        )
+        consume_result = await self._session.execute(consume_query)
+        if consume_result.scalar_one_or_none() is None:
+            await self._session.rollback()
+            return None
+
         self._session.add(membership)
         try:
             await self._session.commit()
