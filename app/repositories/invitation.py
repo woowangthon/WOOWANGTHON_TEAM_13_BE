@@ -39,6 +39,29 @@ class InvitationRepository:
             return None
         return row[0], row[1], row[2]
 
+    async def list_by_store_id(self, store_id: UUID) -> list[Invitation]:
+        query = (
+            select(Invitation)
+            .where(Invitation.store_id == store_id)
+            .order_by(Invitation.created_at.desc(), Invitation.id.desc())
+        )
+        result = await self._session.execute(query)
+        return list(result.scalars().all())
+
+    async def get_available_by_store_and_staff_name(
+        self,
+        store_id: UUID,
+        staff_name: str,
+    ) -> Invitation | None:
+        query = select(Invitation).where(
+            Invitation.store_id == store_id,
+            Invitation.staff_name == staff_name,
+            Invitation.revoked_at.is_(None),
+            Invitation.accepted_at.is_(None),
+        )
+        result = await self._session.execute(query)
+        return result.scalar_one_or_none()
+
     async def get_by_id_and_store_id(
         self,
         invitation_id: UUID,

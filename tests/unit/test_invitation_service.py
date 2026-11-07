@@ -10,6 +10,7 @@ from app.models.user import User
 from app.schemas.invitation import InvitationCreateRequest
 from app.services.invitation import (
     INVITATION_ALPHABET,
+    InvitationAlreadyAvailableError,
     InvitationAlreadyJoinedError,
     InvitationInvalidError,
     InvitationLockedError,
@@ -43,6 +44,26 @@ class FakeInvitationRepository:
         if self.context is None or self.context[0].code != code:
             return None
         return self.context
+
+    async def list_by_store_id(self, store_id: UUID) -> list[Invitation]:
+        invitations = list(self.created)
+        if self.context is not None:
+            invitations.append(self.context[0])
+        return [item for item in invitations if item.store_id == store_id]
+
+    async def get_available_by_store_and_staff_name(
+        self,
+        store_id: UUID,
+        staff_name: str,
+    ) -> Invitation | None:
+        for invitation in await self.list_by_store_id(store_id):
+            if (
+                invitation.staff_name == staff_name
+                and invitation.revoked_at is None
+                and invitation.accepted_at is None
+            ):
+                return invitation
+        return None
 
     async def get_by_id_and_store_id(
         self,
@@ -154,6 +175,18 @@ async def test_create_copies_staff_terms_to_invitation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_rejects_duplicate_available_invitation() -> None:
+    _, store, owner = make_context()
+    repository = FakeInvitationRepository()
+    service = InvitationService(repository, code_generator=lambda: "K7P2QX")
+    request = InvitationCreateRequest(staffName="지은", hourlyWage=10_320)
+    await service.create(store, owner.id, request)
+
+    with pytest.raises(InvitationAlreadyAvailableError):
+        await service.create(store, owner.id, request)
+
+
+@pytest.mark.asyncio
 async def test_five_invalid_codes_lock_user_for_ten_minutes() -> None:
     repository = FakeInvitationRepository()
     service = InvitationService(repository)
@@ -233,4 +266,17 @@ async def test_revoked_invitation_cannot_be_verified() -> None:
         await InvitationService(FakeInvitationRepository(context)).verify(
             "K7P2QX",
             uuid4(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_used_invitation_cannot_be_revoked() -> None:
+    context = make_context()
+    context[0].accepted_at = datetime.now(UTC)
+    context[0].accepted_by_user_id = uuid4()
+
+    with pytest.raises(InvitationRevokedError):
+        await InvitationService(FakeInvitationRepository(context)).revoke(
+            context[1].id,
+            context[0].id,
         )

@@ -46,6 +46,11 @@ class InvitationCodeGenerationError(Exception):
     pass
 
 
+class InvitationAlreadyAvailableError(Exception):
+    def __init__(self, invitation: Invitation) -> None:
+        self.invitation = invitation
+
+
 @dataclass(frozen=True, slots=True)
 class VerifiedInvitation:
     invitation: Invitation
@@ -60,6 +65,14 @@ class InvitationRepositoryProtocol(Protocol):
         self,
         code: str,
     ) -> tuple[Invitation, Store, User] | None: ...
+
+    async def list_by_store_id(self, store_id: UUID) -> list[Invitation]: ...
+
+    async def get_available_by_store_and_staff_name(
+        self,
+        store_id: UUID,
+        staff_name: str,
+    ) -> Invitation | None: ...
 
     async def get_by_id_and_store_id(
         self,
@@ -113,6 +126,13 @@ class InvitationService:
         request: InvitationCreateRequest,
     ) -> Invitation:
         """소유자 매장에 사용할 일회용 초대 코드를 발급합니다."""
+        existing = await self._repository.get_available_by_store_and_staff_name(
+            store.id,
+            request.staff_name,
+        )
+        if existing is not None:
+            raise InvitationAlreadyAvailableError(existing)
+
         for _ in range(10):
             invitation = Invitation(
                 store_id=store.id,
@@ -124,8 +144,36 @@ class InvitationService:
             try:
                 return await self._repository.create(invitation)
             except IntegrityError:
+                existing = (
+                    await self._repository.get_available_by_store_and_staff_name(
+                        store.id,
+                        request.staff_name,
+                    )
+                )
+                if existing is not None:
+                    raise InvitationAlreadyAvailableError(existing) from None
                 continue
         raise InvitationCodeGenerationError
+
+    async def list_for_store(self, store_id: UUID) -> list[Invitation]:
+        """소유자 화면에 발급 이력을 최신순으로 반환합니다."""
+        return await self._repository.list_by_store_id(store_id)
+
+    async def get_shareable(
+        self,
+        store_id: UUID,
+        invitation_id: UUID,
+    ) -> Invitation:
+        """공유할 수 있는 활성 초대 코드를 반환합니다."""
+        invitation = await self._repository.get_by_id_and_store_id(
+            invitation_id,
+            store_id,
+        )
+        if invitation is None:
+            raise InvitationNotFoundError
+        if invitation.revoked_at is not None or invitation.accepted_at is not None:
+            raise InvitationRevokedError
+        return invitation
 
     async def verify(self, code: str, user_id: UUID) -> VerifiedInvitation:
         """코드 상태와 현재 사용자의 가입 가능 여부를 확인합니다."""
@@ -201,9 +249,10 @@ class InvitationService:
         )
         if invitation is None:
             raise InvitationNotFoundError
-        if invitation.revoked_at is None:
-            invitation.revoked_at = datetime.now(UTC)
-            await self._repository.save(invitation)
+        if invitation.revoked_at is not None or invitation.accepted_at is not None:
+            raise InvitationRevokedError
+        invitation.revoked_at = datetime.now(UTC)
+        await self._repository.save(invitation)
 
     async def _record_failure(self, user_id: UUID, now: datetime) -> NoReturn:
         attempt = await self._repository.get_attempt(user_id)

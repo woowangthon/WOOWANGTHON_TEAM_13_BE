@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -40,6 +41,25 @@ class InvitationResponse(InvitationSchema):
     staff_name: str
     hourly_wage: int
     created_at: datetime
+
+
+InvitationStatus = Literal["AVAILABLE", "USED", "REVOKED"]
+
+
+class InvitationSummaryResponse(InvitationResponse):
+    status: InvitationStatus
+    accepted_at: datetime | None
+    revoked_at: datetime | None
+
+
+class InvitationListResponse(InvitationSchema):
+    invitations: list[InvitationSummaryResponse]
+
+
+class InvitationShareInfoResponse(InvitationSchema):
+    invitation_id: UUID
+    code: str
+    deep_link: str
 
 
 class InvitationCodeRequest(InvitationSchema):

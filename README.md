@@ -133,6 +133,16 @@ POST /api/v1/memberships/join
 가입이 완료되면 `GET /api/v1/users/me`와 `GET /api/v1/users/me/stores`에서
 실제 소유·직원 매장 목록을 반환합니다.
 
+사장님은 초대 코드 발급 이력과 공유 정보를 조회할 수 있습니다. 같은 매장과
+직원 이름으로 사용 가능한 코드는 하나만 유지되며, 사용 또는 취소된 뒤에는 새
+코드를 발급할 수 있습니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/api/v1/stores/{storeId}/invitations` | 초대 코드 목록 조회 |
+| `GET` | `/api/v1/stores/{storeId}/invitations/{invitationId}/share-info` | 코드와 FE 입장 링크 조회 |
+| `DELETE` | `/api/v1/stores/{storeId}/invitations/{invitationId}` | 미사용 초대 코드 취소 |
+
 ## 사용자 정보 API
 
 사용자 정보 API는 모두 Supabase access token이 필요합니다. 첫
