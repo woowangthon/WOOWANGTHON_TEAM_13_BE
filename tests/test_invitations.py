@@ -17,6 +17,7 @@ from app.models.store import Store
 from app.models.user import User
 from app.schemas.invitation import InvitationCreateRequest
 from app.services.invitation import (
+    InvitationAlreadyAvailableError,
     InvitationInvalidError,
     InvitationLockedError,
     VerifiedInvitation,
@@ -56,6 +57,7 @@ class StubInvitationService:
             created_at=datetime.now(UTC),
         )
         self.verify_error: Exception | None = None
+        self.create_error: Exception | None = None
         self.revoked = False
 
     async def create(
@@ -64,6 +66,8 @@ class StubInvitationService:
         creator_id: UUID,
         request: InvitationCreateRequest,
     ) -> Invitation:
+        if self.create_error is not None:
+            raise self.create_error
         self.invitation.staff_name = request.staff_name
         self.invitation.hourly_wage = request.hourly_wage
         return self.invitation
@@ -72,6 +76,16 @@ class StubInvitationService:
         if self.verify_error is not None:
             raise self.verify_error
         return VerifiedInvitation(self.invitation, self.store, self.owner)
+
+    async def list_for_store(self, store_id: UUID) -> list[Invitation]:
+        return [self.invitation]
+
+    async def get_shareable(
+        self,
+        store_id: UUID,
+        invitation_id: UUID,
+    ) -> Invitation:
+        return self.invitation
 
     async def join(self, code: str, user_id: UUID) -> tuple[Membership, Store]:
         if self.verify_error is not None:
@@ -138,6 +152,10 @@ def test_invitation_routes_are_registered() -> None:
     assert "/api/v1/stores/{store_id}/invitations" in paths
     assert "/api/v1/invitations/verify" in paths
     assert "/api/v1/memberships/join" in paths
+    assert (
+        "/api/v1/stores/{store_id}/invitations/{invitation_id}/share-info"
+        in paths
+    )
 
 
 def test_owner_creates_invitation() -> None:
@@ -171,6 +189,54 @@ def test_create_rejects_wage_below_2026_minimum() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_concurrent_create_returns_existing_invitation_conflict() -> None:
+    client, service = create_client()
+    service.create_error = InvitationAlreadyAvailableError(service.invitation)
+
+    response = client.post(
+        f"/api/v1/stores/{service.store.id}/invitations",
+        json={"staffName": "지은", "hourlyWage": 10_320},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "INVITE_ALREADY_AVAILABLE",
+        "message": "해당 직원에게 이미 사용 가능한 초대 코드가 있어요",
+        "detail": {
+            "invitationId": str(service.invitation.id),
+            "code": "K7P2QX",
+        },
+    }
+
+
+def test_owner_lists_invitations_with_status() -> None:
+    client, service = create_client()
+
+    response = client.get(
+        f"/api/v1/stores/{service.store.id}/invitations"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["invitations"][0]["status"] == "AVAILABLE"
+    assert response.json()["invitations"][0]["code"] == "K7P2QX"
+
+
+def test_owner_gets_invitation_share_info() -> None:
+    client, service = create_client()
+
+    response = client.get(
+        f"/api/v1/stores/{service.store.id}/invitations/"
+        f"{service.invitation.id}/share-info"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "invitationId": str(service.invitation.id),
+        "code": "K7P2QX",
+        "deepLink": "/staff/join?code=K7P2QX",
+    }
 
 
 def test_verify_returns_frontend_contract() -> None:

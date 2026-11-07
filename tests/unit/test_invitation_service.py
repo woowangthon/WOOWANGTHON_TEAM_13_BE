@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.models.invitation import Invitation, InvitationAttempt
 from app.models.membership import Membership
@@ -10,6 +12,7 @@ from app.models.user import User
 from app.schemas.invitation import InvitationCreateRequest
 from app.services.invitation import (
     INVITATION_ALPHABET,
+    InvitationAlreadyAvailableError,
     InvitationAlreadyJoinedError,
     InvitationInvalidError,
     InvitationLockedError,
@@ -28,6 +31,7 @@ class FakeInvitationRepository:
         self.membership: Membership | None = None
         self.attempts: dict[UUID, InvitationAttempt] = {}
         self.created: list[Invitation] = []
+        self.consume_succeeds = True
 
     async def create(self, invitation: Invitation) -> Invitation:
         invitation.id = uuid4()
@@ -42,6 +46,26 @@ class FakeInvitationRepository:
         if self.context is None or self.context[0].code != code:
             return None
         return self.context
+
+    async def list_by_store_id(self, store_id: UUID) -> list[Invitation]:
+        invitations = list(self.created)
+        if self.context is not None:
+            invitations.append(self.context[0])
+        return [item for item in invitations if item.store_id == store_id]
+
+    async def get_available_by_store_and_staff_name(
+        self,
+        store_id: UUID,
+        staff_name: str,
+    ) -> Invitation | None:
+        for invitation in await self.list_by_store_id(store_id):
+            if (
+                invitation.staff_name == staff_name
+                and invitation.revoked_at is None
+                and invitation.accepted_at is None
+            ):
+                return invitation
+        return None
 
     async def get_by_id_and_store_id(
         self,
@@ -73,7 +97,11 @@ class FakeInvitationRepository:
         self,
         invitation: Invitation,
         membership: Membership,
-    ) -> Membership:
+    ) -> Membership | None:
+        if not self.consume_succeeds:
+            return None
+        invitation.accepted_at = membership.joined_at
+        invitation.accepted_by_user_id = membership.user_id
         self.membership = membership
         return membership
 
@@ -92,6 +120,38 @@ class FakeInvitationRepository:
 
     async def reset_attempt(self, user_id: UUID) -> None:
         self.attempts.pop(user_id, None)
+
+
+class ConcurrentInvitationRepository(FakeInvitationRepository):
+    async def create(self, invitation: Invitation) -> Invitation:
+        concurrent_invitation = Invitation(
+            id=uuid4(),
+            store_id=invitation.store_id,
+            created_by_user_id=invitation.created_by_user_id,
+            code="M8R4TW",
+            staff_name=invitation.staff_name,
+            hourly_wage=invitation.hourly_wage,
+            created_at=datetime.now(UTC),
+        )
+        self.created.append(concurrent_invitation)
+        raise IntegrityError(
+            "INSERT INTO invitations",
+            {},
+            RuntimeError("duplicate active invitation"),
+        )
+
+
+class StoreIdExpiresAfterRollback:
+    def __init__(self, store_id: UUID) -> None:
+        self._store_id = store_id
+        self._access_count = 0
+
+    @property
+    def id(self) -> UUID:
+        self._access_count += 1
+        if self._access_count > 2:
+            raise RuntimeError("store was expired by rollback")
+        return self._store_id
 
 
 def make_context() -> tuple[Invitation, Store, User]:
@@ -146,6 +206,35 @@ async def test_create_copies_staff_terms_to_invitation() -> None:
     assert invitation.staff_name == "지은"
     assert invitation.hourly_wage == 10_320
     assert invitation.store_id == store.id
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_duplicate_available_invitation() -> None:
+    _, store, owner = make_context()
+    repository = FakeInvitationRepository()
+    service = InvitationService(repository, code_generator=lambda: "K7P2QX")
+    request = InvitationCreateRequest(staffName="지은", hourlyWage=10_320)
+    await service.create(store, owner.id, request)
+
+    with pytest.raises(InvitationAlreadyAvailableError):
+        await service.create(store, owner.id, request)
+
+
+@pytest.mark.asyncio
+async def test_create_returns_existing_invitation_after_concurrent_insert() -> None:
+    _, store, owner = make_context()
+    repository = ConcurrentInvitationRepository()
+    service = InvitationService(repository, code_generator=lambda: "K7P2QX")
+    expiring_store = cast(Store, StoreIdExpiresAfterRollback(store.id))
+
+    with pytest.raises(InvitationAlreadyAvailableError) as exc_info:
+        await service.create(
+            expiring_store,
+            owner.id,
+            InvitationCreateRequest(staffName="지은", hourlyWage=10_320),
+        )
+
+    assert exc_info.value.invitation.code == "M8R4TW"
 
 
 @pytest.mark.asyncio
@@ -210,6 +299,16 @@ async def test_join_creates_membership_and_consumes_invitation() -> None:
 
 
 @pytest.mark.asyncio
+async def test_join_rejects_invitation_consumed_by_concurrent_request() -> None:
+    context = make_context()
+    repository = FakeInvitationRepository(context)
+    repository.consume_succeeds = False
+
+    with pytest.raises(InvitationRevokedError):
+        await InvitationService(repository).join("K7P2QX", uuid4())
+
+
+@pytest.mark.asyncio
 async def test_revoked_invitation_cannot_be_verified() -> None:
     context = make_context()
     context[0].revoked_at = datetime.now(UTC)
@@ -218,4 +317,17 @@ async def test_revoked_invitation_cannot_be_verified() -> None:
         await InvitationService(FakeInvitationRepository(context)).verify(
             "K7P2QX",
             uuid4(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_used_invitation_cannot_be_revoked() -> None:
+    context = make_context()
+    context[0].accepted_at = datetime.now(UTC)
+    context[0].accepted_by_user_id = uuid4()
+
+    with pytest.raises(InvitationRevokedError):
+        await InvitationService(FakeInvitationRepository(context)).revoke(
+            context[1].id,
+            context[0].id,
         )
