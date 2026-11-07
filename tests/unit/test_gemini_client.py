@@ -19,6 +19,7 @@ def make_client(
         model="test-model",
         timeout_seconds=1,
         transport=httpx.MockTransport(handler),
+        retry_delay_seconds=0,
     )
 
 
@@ -97,3 +98,52 @@ async def test_timeout_raises_llm_error() -> None:
 
     with pytest.raises(LLMError):
         await generate(make_client(handler))
+
+
+@pytest.mark.parametrize("status_code", [429, 503])
+async def test_retries_once_on_temporary_error(status_code: int) -> None:
+    responses = [httpx.Response(status_code, json={}), gemini_response('{"ok": true}')]
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return responses[len(calls) - 1]
+
+    assert await generate(make_client(handler)) == {"ok": True}
+    assert len(calls) == 2
+
+
+async def test_raises_after_retry_fails() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(503, json={})
+
+    with pytest.raises(LLMError):
+        await generate(make_client(handler))
+    assert len(calls) == 2
+
+
+async def test_does_not_retry_other_errors() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(500, json={})
+
+    with pytest.raises(LLMError):
+        await generate(make_client(handler))
+    assert len(calls) == 1
+
+
+async def test_does_not_retry_timeout() -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        raise httpx.ReadTimeout("timeout", request=request)
+
+    with pytest.raises(LLMError):
+        await generate(make_client(handler))
+    assert len(calls) == 1
