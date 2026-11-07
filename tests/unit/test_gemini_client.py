@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from app.integrations.gemini import GeminiClient
-from app.integrations.llm import LLMError
+from app.integrations.llm import LLMError, LLMImage
 
 SCHEMA = {"type": "OBJECT"}
 
@@ -56,6 +56,27 @@ async def test_sends_key_in_header_and_requests_json() -> None:
     assert body["systemInstruction"]["parts"][0]["text"] == "system"
     assert body["generationConfig"]["responseMimeType"] == "application/json"
     assert body["generationConfig"]["responseSchema"] == SCHEMA
+
+
+async def test_sends_images_as_inline_data() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return gemini_response('{"ok": true}')
+
+    await make_client(handler).generate_json(
+        system_prompt="system",
+        user_prompt="user",
+        response_schema=SCHEMA,
+        images=[LLMImage(mime_type="image/png", data=b"photo")],
+    )
+
+    parts = json.loads(captured[0].content)["contents"][0]["parts"]
+    assert parts[0] == {"text": "user"}
+    assert parts[1] == {
+        "inlineData": {"mimeType": "image/png", "data": "cGhvdG8="}
+    }
 
 
 async def test_ignores_thought_parts() -> None:

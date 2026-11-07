@@ -211,9 +211,15 @@ uvicorn app.app:app --reload
 | `GET` | `/api/v1/stores/{storeId}/recipes/{recipeId}` | 레시피 상세 조회 |
 | `PATCH` | `/api/v1/stores/{storeId}/recipes/{recipeId}` | 레시피 수정 |
 | `DELETE` | `/api/v1/stores/{storeId}/recipes/{recipeId}` | 레시피 삭제 |
+| `POST` | `/api/v1/stores/{storeId}/recipe-scans` | 사진으로 레시피 초안 생성 |
 
 레시피 등록은 `multipart/form-data`이며 `recipe` 파트에 JSON을 담습니다. 파일
 저장소가 정해지기 전까지 `images` 파트를 보내면 `501`을 반환합니다.
+
+레시피 스캔은 사장님만 사용할 수 있고 `multipart/form-data`의 `image` 파트로 사진을
+보냅니다. JPEG, PNG, WebP, HEIC, HEIF를 10MB까지 받습니다. 사진과 초안은 저장하지
+않으며, 사장님이 확인한 내용을 레시피 등록 API로 저장합니다. 읽지 못한 값은 `null`로
+반환하고, 레시피로 읽을 수 없는 사진은 `422`를 반환합니다.
 
 ## AI 사수 채팅 API
 
