@@ -93,6 +93,19 @@ class FakeInvitationRepository:
             return self.membership
         return None
 
+    async def get_membership(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+    ) -> Membership | None:
+        if (
+            self.membership is not None
+            and self.membership.store_id == store_id
+            and self.membership.user_id == user_id
+        ):
+            return self.membership
+        return None
+
     async def accept(
         self,
         invitation: Invitation,
@@ -296,6 +309,34 @@ async def test_join_creates_membership_and_consumes_invitation() -> None:
     assert membership.hourly_wage == 10_320
     assert context[0].accepted_by_user_id == user_id
     assert context[0].accepted_at is not None
+
+
+@pytest.mark.asyncio
+async def test_join_reactivates_left_membership() -> None:
+    context = make_context()
+    repository = FakeInvitationRepository(context)
+    user_id = uuid4()
+    original_member_id = uuid4()
+    repository.membership = Membership(
+        id=original_member_id,
+        store_id=context[1].id,
+        user_id=user_id,
+        role="staff",
+        staff_name="예전 이름",
+        hourly_wage=10_000,
+        joined_at=datetime.now(UTC),
+        left_at=datetime.now(UTC),
+    )
+
+    membership, _ = await InvitationService(repository).join(
+        "K7P2QX",
+        user_id,
+    )
+
+    assert membership.id == original_member_id
+    assert membership.staff_name == "지은"
+    assert membership.hourly_wage == 10_320
+    assert membership.left_at is None
 
 
 @pytest.mark.asyncio

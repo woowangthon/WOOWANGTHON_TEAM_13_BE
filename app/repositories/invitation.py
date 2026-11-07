@@ -87,6 +87,18 @@ class InvitationRepository:
         result = await self._session.execute(query)
         return result.scalar_one_or_none()
 
+    async def get_membership(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+    ) -> Membership | None:
+        query = select(Membership).where(
+            Membership.store_id == store_id,
+            Membership.user_id == user_id,
+        )
+        result = await self._session.execute(query)
+        return result.scalar_one_or_none()
+
     async def accept(
         self,
         invitation: Invitation,

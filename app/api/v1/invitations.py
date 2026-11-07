@@ -6,10 +6,11 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.stores import get_store_service
-from app.api.v1.users import get_user_service
+from app.api.v1.users import get_membership_service, get_user_service
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.db.session import get_db
 from app.models.invitation import Invitation
+from app.models.membership import Membership
 from app.models.user import User
 from app.repositories.invitation import InvitationRepository
 from app.schemas.invitation import (
@@ -24,6 +25,7 @@ from app.schemas.invitation import (
     InvitationVerificationResponse,
     MembershipResponse,
 )
+from app.schemas.membership import MemberListResponse, MemberResponse
 from app.services.invitation import (
     InvitationAlreadyAvailableError,
     InvitationAlreadyJoinedError,
@@ -33,6 +35,11 @@ from app.services.invitation import (
     InvitationNotFoundError,
     InvitationRevokedError,
     InvitationService,
+)
+from app.services.membership import (
+    MemberAlreadyLeftError,
+    MemberNotFoundError,
+    MembershipService,
 )
 from app.services.store import StoreNotFoundError, StoreService
 from app.services.user import InactiveUserError, UserService
@@ -136,6 +143,19 @@ def _invitation_summary(invitation: Invitation) -> InvitationSummaryResponse:
         status=_invitation_status(invitation),
         accepted_at=invitation.accepted_at,
         revoked_at=invitation.revoked_at,
+    )
+
+
+def _member_response(membership: Membership) -> MemberResponse:
+    return MemberResponse(
+        member_id=membership.id,
+        user_id=membership.user_id,
+        staff_name=membership.staff_name,
+        role=membership.role,
+        hourly_wage=membership.hourly_wage,
+        status="LEFT" if membership.left_at is not None else "ACTIVE",
+        joined_at=membership.joined_at,
+        left_at=membership.left_at,
     )
 
 
@@ -352,6 +372,129 @@ async def join_membership(
         staff_name=membership.staff_name,
         joined_at=membership.joined_at,
     )
+
+
+@router.get(
+    "/stores/{store_id}/members",
+    response_model=MemberListResponse,
+)
+async def list_members(
+    store_id: UUID,
+    identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+    store_service: Annotated[StoreService, Depends(get_store_service)],
+    membership_service: Annotated[
+        MembershipService,
+        Depends(get_membership_service),
+    ],
+) -> MemberListResponse | Response:
+    owner = await _active_user(user_service, identity)
+    try:
+        await store_service.get_for_owner(store_id, owner.id)
+    except StoreNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "STORE_NOT_FOUND",
+                "message": "매장을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    memberships = await membership_service.list_members(store_id)
+    return MemberListResponse(
+        members=[_member_response(item) for item in memberships]
+    )
+
+
+@router.get(
+    "/stores/{store_id}/members/{member_id}",
+    response_model=MemberResponse,
+)
+async def get_member(
+    store_id: UUID,
+    member_id: UUID,
+    identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+    store_service: Annotated[StoreService, Depends(get_store_service)],
+    membership_service: Annotated[
+        MembershipService,
+        Depends(get_membership_service),
+    ],
+) -> MemberResponse | Response:
+    owner = await _active_user(user_service, identity)
+    try:
+        await store_service.get_for_owner(store_id, owner.id)
+    except StoreNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "STORE_NOT_FOUND",
+                "message": "매장을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    try:
+        membership = await membership_service.get_member(store_id, member_id)
+    except MemberNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "MEMBER_NOT_FOUND",
+                "message": "구성원을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    return _member_response(membership)
+
+
+@router.delete(
+    "/stores/{store_id}/members/{member_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def leave_member(
+    store_id: UUID,
+    member_id: UUID,
+    identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+    store_service: Annotated[StoreService, Depends(get_store_service)],
+    membership_service: Annotated[
+        MembershipService,
+        Depends(get_membership_service),
+    ],
+) -> Response:
+    owner = await _active_user(user_service, identity)
+    try:
+        await store_service.get_for_owner(store_id, owner.id)
+    except StoreNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "STORE_NOT_FOUND",
+                "message": "매장을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    try:
+        await membership_service.leave(store_id, member_id)
+    except MemberNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "MEMBER_NOT_FOUND",
+                "message": "구성원을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    except MemberAlreadyLeftError:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "code": "MEMBER_ALREADY_LEFT",
+                "message": "이미 퇴사 처리된 구성원이에요",
+                "detail": None,
+            },
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.delete(

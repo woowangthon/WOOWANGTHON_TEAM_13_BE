@@ -1,8 +1,11 @@
+from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.invitation import Invitation
 from app.models.membership import Membership
 from app.models.store import Store
 
@@ -36,3 +39,50 @@ class MembershipRepository:
         staff_result = await self._session.execute(staff_query)
         stores.extend((store, "staff") for store in staff_result.scalars().all())
         return stores
+
+    async def list_by_store_id(self, store_id: UUID) -> list[Membership]:
+        query = (
+            select(Membership)
+            .where(Membership.store_id == store_id)
+            .order_by(Membership.joined_at.desc(), Membership.id.desc())
+        )
+        result = await self._session.execute(query)
+        return list(result.scalars().all())
+
+    async def get_by_id_and_store_id(
+        self,
+        member_id: UUID,
+        store_id: UUID,
+    ) -> Membership | None:
+        query = select(Membership).where(
+            Membership.id == member_id,
+            Membership.store_id == store_id,
+        )
+        result = await self._session.execute(query)
+        return result.scalar_one_or_none()
+
+    async def leave(
+        self,
+        membership: Membership,
+        left_at: datetime,
+    ) -> Membership:
+        membership.left_at = left_at
+        self._session.add(membership)
+        revoke_unused_invitations = (
+            update(Invitation)
+            .where(
+                Invitation.store_id == membership.store_id,
+                Invitation.staff_name == membership.staff_name,
+                Invitation.accepted_at.is_(None),
+                Invitation.revoked_at.is_(None),
+            )
+            .values(revoked_at=left_at)
+        )
+        await self._session.execute(revoke_unused_invitations)
+        try:
+            await self._session.commit()
+        except SQLAlchemyError:
+            await self._session.rollback()
+            raise
+        await self._session.refresh(membership)
+        return membership
