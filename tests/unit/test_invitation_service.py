@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.models.invitation import Invitation, InvitationAttempt
 from app.models.membership import Membership
@@ -120,6 +122,38 @@ class FakeInvitationRepository:
         self.attempts.pop(user_id, None)
 
 
+class ConcurrentInvitationRepository(FakeInvitationRepository):
+    async def create(self, invitation: Invitation) -> Invitation:
+        concurrent_invitation = Invitation(
+            id=uuid4(),
+            store_id=invitation.store_id,
+            created_by_user_id=invitation.created_by_user_id,
+            code="M8R4TW",
+            staff_name=invitation.staff_name,
+            hourly_wage=invitation.hourly_wage,
+            created_at=datetime.now(UTC),
+        )
+        self.created.append(concurrent_invitation)
+        raise IntegrityError(
+            "INSERT INTO invitations",
+            {},
+            RuntimeError("duplicate active invitation"),
+        )
+
+
+class StoreIdExpiresAfterRollback:
+    def __init__(self, store_id: UUID) -> None:
+        self._store_id = store_id
+        self._access_count = 0
+
+    @property
+    def id(self) -> UUID:
+        self._access_count += 1
+        if self._access_count > 2:
+            raise RuntimeError("store was expired by rollback")
+        return self._store_id
+
+
 def make_context() -> tuple[Invitation, Store, User]:
     owner = User(
         id=uuid4(),
@@ -184,6 +218,23 @@ async def test_create_rejects_duplicate_available_invitation() -> None:
 
     with pytest.raises(InvitationAlreadyAvailableError):
         await service.create(store, owner.id, request)
+
+
+@pytest.mark.asyncio
+async def test_create_returns_existing_invitation_after_concurrent_insert() -> None:
+    _, store, owner = make_context()
+    repository = ConcurrentInvitationRepository()
+    service = InvitationService(repository, code_generator=lambda: "K7P2QX")
+    expiring_store = cast(Store, StoreIdExpiresAfterRollback(store.id))
+
+    with pytest.raises(InvitationAlreadyAvailableError) as exc_info:
+        await service.create(
+            expiring_store,
+            owner.id,
+            InvitationCreateRequest(staffName="지은", hourlyWage=10_320),
+        )
+
+    assert exc_info.value.invitation.code == "M8R4TW"
 
 
 @pytest.mark.asyncio

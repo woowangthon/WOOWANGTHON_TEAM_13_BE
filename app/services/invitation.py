@@ -126,8 +126,9 @@ class InvitationService:
         request: InvitationCreateRequest,
     ) -> Invitation:
         """소유자 매장에 사용할 일회용 초대 코드를 발급합니다."""
+        store_id = store.id
         existing = await self._repository.get_available_by_store_and_staff_name(
-            store.id,
+            store_id,
             request.staff_name,
         )
         if existing is not None:
@@ -135,7 +136,7 @@ class InvitationService:
 
         for _ in range(10):
             invitation = Invitation(
-                store_id=store.id,
+                store_id=store_id,
                 created_by_user_id=creator_id,
                 code=self._code_generator(),
                 staff_name=request.staff_name,
@@ -146,7 +147,7 @@ class InvitationService:
             except IntegrityError:
                 existing = (
                     await self._repository.get_available_by_store_and_staff_name(
-                        store.id,
+                        store_id,
                         request.staff_name,
                     )
                 )
