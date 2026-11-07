@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Uuid, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -11,6 +11,17 @@ class Invitation(Base):
     """매장에 합류할 직원을 위해 발급한 일회용 초대 코드입니다."""
 
     __tablename__ = "invitations"
+    __table_args__ = (
+        Index(
+            "uq_invitations_available_store_staff_name",
+            "store_id",
+            "staff_name",
+            unique=True,
+            postgresql_where=text(
+                "revoked_at IS NULL AND accepted_at IS NULL"
+            ),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     store_id: Mapped[UUID] = mapped_column(

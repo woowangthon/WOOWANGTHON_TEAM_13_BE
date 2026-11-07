@@ -9,17 +9,23 @@ from app.api.v1.stores import get_store_service
 from app.api.v1.users import get_user_service
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.db.session import get_db
+from app.models.invitation import Invitation
 from app.models.user import User
 from app.repositories.invitation import InvitationRepository
 from app.schemas.invitation import (
     InvitationCodeRequest,
     InvitationCreateRequest,
+    InvitationListResponse,
     InvitationResponse,
+    InvitationShareInfoResponse,
+    InvitationStatus,
     InvitationStoreResponse,
+    InvitationSummaryResponse,
     InvitationVerificationResponse,
     MembershipResponse,
 )
 from app.services.invitation import (
+    InvitationAlreadyAvailableError,
     InvitationAlreadyJoinedError,
     InvitationCodeGenerationError,
     InvitationInvalidError,
@@ -111,6 +117,28 @@ def _error_response(error: Exception) -> JSONResponse:
     raise error
 
 
+def _invitation_status(invitation: Invitation) -> InvitationStatus:
+    if invitation.accepted_at is not None:
+        return "USED"
+    if invitation.revoked_at is not None:
+        return "REVOKED"
+    return "AVAILABLE"
+
+
+def _invitation_summary(invitation: Invitation) -> InvitationSummaryResponse:
+    return InvitationSummaryResponse(
+        invitation_id=invitation.id,
+        store_id=invitation.store_id,
+        code=invitation.code,
+        staff_name=invitation.staff_name,
+        hourly_wage=invitation.hourly_wage,
+        created_at=invitation.created_at,
+        status=_invitation_status(invitation),
+        accepted_at=invitation.accepted_at,
+        revoked_at=invitation.revoked_at,
+    )
+
+
 @router.post(
     "/stores/{store_id}/invitations",
     response_model=InvitationResponse,
@@ -141,6 +169,18 @@ async def create_invitation(
         )
     try:
         invitation = await invitation_service.create(store, owner.id, request)
+    except InvitationAlreadyAvailableError as error:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "code": "INVITE_ALREADY_AVAILABLE",
+                "message": "해당 직원에게 이미 사용 가능한 초대 코드가 있어요",
+                "detail": {
+                    "invitationId": str(error.invitation.id),
+                    "code": error.invitation.code,
+                },
+            },
+        )
     except InvitationCodeGenerationError:
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -157,6 +197,88 @@ async def create_invitation(
         staff_name=invitation.staff_name,
         hourly_wage=invitation.hourly_wage,
         created_at=invitation.created_at,
+    )
+
+
+@router.get(
+    "/stores/{store_id}/invitations",
+    response_model=InvitationListResponse,
+)
+async def list_invitations(
+    store_id: UUID,
+    identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+    store_service: Annotated[StoreService, Depends(get_store_service)],
+    invitation_service: Annotated[
+        InvitationService,
+        Depends(get_invitation_service),
+    ],
+) -> InvitationListResponse | Response:
+    owner = await _active_user(user_service, identity)
+    try:
+        await store_service.get_for_owner(store_id, owner.id)
+    except StoreNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "STORE_NOT_FOUND",
+                "message": "매장을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    invitations = await invitation_service.list_for_store(store_id)
+    return InvitationListResponse(
+        invitations=[_invitation_summary(item) for item in invitations]
+    )
+
+
+@router.get(
+    "/stores/{store_id}/invitations/{invitation_id}/share-info",
+    response_model=InvitationShareInfoResponse,
+)
+async def get_invitation_share_info(
+    store_id: UUID,
+    invitation_id: UUID,
+    identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+    store_service: Annotated[StoreService, Depends(get_store_service)],
+    invitation_service: Annotated[
+        InvitationService,
+        Depends(get_invitation_service),
+    ],
+) -> InvitationShareInfoResponse | Response:
+    owner = await _active_user(user_service, identity)
+    try:
+        await store_service.get_for_owner(store_id, owner.id)
+    except StoreNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "STORE_NOT_FOUND",
+                "message": "매장을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    try:
+        invitation = await invitation_service.get_shareable(
+            store_id,
+            invitation_id,
+        )
+    except InvitationNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "INVITE_NOT_FOUND",
+                "message": "초대 코드를 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    except InvitationRevokedError as error:
+        return _error_response(error)
+    return InvitationShareInfoResponse(
+        invitation_id=invitation.id,
+        code=invitation.code,
+        deep_link=f"/staff/join?code={invitation.code}",
     )
 
 
@@ -270,4 +392,6 @@ async def revoke_invitation(
                 "detail": None,
             },
         )
+    except InvitationRevokedError as error:
+        return _error_response(error)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
