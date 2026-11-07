@@ -142,6 +142,13 @@ POST /api/v1/memberships/join
 | `GET` | `/api/v1/stores/{storeId}/invitations` | 초대 코드 목록 조회 |
 | `GET` | `/api/v1/stores/{storeId}/invitations/{invitationId}/share-info` | 코드와 FE 입장 링크 조회 |
 | `DELETE` | `/api/v1/stores/{storeId}/invitations/{invitationId}` | 미사용 초대 코드 취소 |
+| `GET` | `/api/v1/stores/{storeId}/members` | 구성원 목록 조회 |
+| `GET` | `/api/v1/stores/{storeId}/members/{memberId}` | 구성원 상세 조회 |
+| `DELETE` | `/api/v1/stores/{storeId}/members/{memberId}` | 구성원 퇴사 처리 |
+
+퇴사 처리는 멤버십을 삭제하지 않고 `LEFT` 상태로 보존합니다. 같은 사용자가 새
+초대 코드로 다시 가입하면 기존 멤버십을 활성화하고 직원명과 시급을 새 초대
+조건으로 갱신합니다.
 
 ## 사용자 정보 API
 

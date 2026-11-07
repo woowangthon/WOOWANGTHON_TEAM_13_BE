@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app.api.v1.invitations import get_invitation_service, router
 from app.api.v1.stores import get_store_service
-from app.api.v1.users import get_user_service
+from app.api.v1.users import get_membership_service, get_user_service
 from app.app import app
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.models.invitation import Invitation
@@ -107,6 +107,33 @@ class StubInvitationService:
         self.revoked = True
 
 
+class StubMembershipService:
+    def __init__(self, store: Store) -> None:
+        self.membership = Membership(
+            id=uuid4(),
+            store_id=store.id,
+            user_id=uuid4(),
+            role="staff",
+            staff_name="지은",
+            hourly_wage=10_320,
+            joined_at=datetime.now(UTC),
+        )
+
+    async def list_members(self, store_id: UUID) -> list[Membership]:
+        return [self.membership]
+
+    async def get_member(
+        self,
+        store_id: UUID,
+        member_id: UUID,
+    ) -> Membership:
+        return self.membership
+
+    async def leave(self, store_id: UUID, member_id: UUID) -> Membership:
+        self.membership.left_at = datetime.now(UTC)
+        return self.membership
+
+
 def create_client() -> tuple[TestClient, StubInvitationService]:
     test_app = FastAPI()
     test_app.include_router(router, prefix="/api/v1")
@@ -127,6 +154,8 @@ def create_client() -> tuple[TestClient, StubInvitationService]:
     user_service = StubUserService(owner)
     store_service = StubStoreService(store)
     invitation_service = StubInvitationService(store, owner)
+    membership_service = StubMembershipService(store)
+    invitation_service.membership_service = membership_service
 
     async def authenticated_user() -> AuthenticatedUser:
         claims: Mapping[str, Any] = {}
@@ -143,6 +172,9 @@ def create_client() -> tuple[TestClient, StubInvitationService]:
     test_app.dependency_overrides[get_invitation_service] = (
         lambda: invitation_service
     )
+    test_app.dependency_overrides[get_membership_service] = (
+        lambda: membership_service
+    )
     return TestClient(test_app), invitation_service
 
 
@@ -152,6 +184,8 @@ def test_invitation_routes_are_registered() -> None:
     assert "/api/v1/stores/{store_id}/invitations" in paths
     assert "/api/v1/invitations/verify" in paths
     assert "/api/v1/memberships/join" in paths
+    assert "/api/v1/stores/{store_id}/members" in paths
+    assert "/api/v1/stores/{store_id}/members/{member_id}" in paths
     assert (
         "/api/v1/stores/{store_id}/invitations/{invitation_id}/share-info"
         in paths
@@ -318,3 +352,38 @@ def test_owner_revokes_invitation() -> None:
 
     assert response.status_code == 204
     assert service.revoked is True
+
+
+def test_owner_lists_members() -> None:
+    client, service = create_client()
+
+    response = client.get(f"/api/v1/stores/{service.store.id}/members")
+
+    assert response.status_code == 200
+    assert response.json()["members"][0]["staffName"] == "지은"
+    assert response.json()["members"][0]["status"] == "ACTIVE"
+
+
+def test_owner_gets_member_detail() -> None:
+    client, service = create_client()
+    membership = service.membership_service.membership
+
+    response = client.get(
+        f"/api/v1/stores/{service.store.id}/members/{membership.id}"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["memberId"] == str(membership.id)
+    assert response.json()["hourlyWage"] == 10_320
+
+
+def test_owner_soft_deletes_member() -> None:
+    client, service = create_client()
+    membership = service.membership_service.membership
+
+    response = client.delete(
+        f"/api/v1/stores/{service.store.id}/members/{membership.id}"
+    )
+
+    assert response.status_code == 204
+    assert membership.left_at is not None

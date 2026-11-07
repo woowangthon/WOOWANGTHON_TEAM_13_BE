@@ -86,6 +86,12 @@ class InvitationRepositoryProtocol(Protocol):
         user_id: UUID,
     ) -> Membership | None: ...
 
+    async def get_membership(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+    ) -> Membership | None: ...
+
     async def accept(
         self,
         invitation: Invitation,
@@ -213,15 +219,26 @@ class InvitationService:
         """유효한 초대 코드를 사용해 직원 멤버십을 생성합니다."""
         verified = await self.verify(code, user_id)
         now = datetime.now(UTC)
-        membership = Membership(
-            id=uuid4(),
-            store_id=verified.store.id,
-            user_id=user_id,
-            role="staff",
-            staff_name=verified.invitation.staff_name,
-            hourly_wage=verified.invitation.hourly_wage,
-            joined_at=now,
+        membership = await self._repository.get_membership(
+            verified.store.id,
+            user_id,
         )
+        if membership is None:
+            membership = Membership(
+                id=uuid4(),
+                store_id=verified.store.id,
+                user_id=user_id,
+                role="staff",
+                staff_name=verified.invitation.staff_name,
+                hourly_wage=verified.invitation.hourly_wage,
+                joined_at=now,
+            )
+        else:
+            membership.role = "staff"
+            membership.staff_name = verified.invitation.staff_name
+            membership.hourly_wage = verified.invitation.hourly_wage
+            membership.joined_at = now
+            membership.left_at = None
         try:
             saved = await self._repository.accept(
                 verified.invitation,
