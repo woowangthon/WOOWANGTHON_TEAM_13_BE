@@ -1,11 +1,12 @@
 import asyncio
+import base64
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import httpx
 
-from app.integrations.llm import LLMError
+from app.integrations.llm import LLMError, LLMImage
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 RETRYABLE_STATUS_CODES = frozenset({429, 503})
@@ -35,14 +36,25 @@ class GeminiClient:
         system_prompt: str,
         user_prompt: str,
         response_schema: Mapping[str, Any],
+        images: Sequence[LLMImage] = (),
     ) -> Mapping[str, Any]:
         """Gemini에 구조화된 JSON 응답을 요청합니다."""
         if not self._api_key:
             raise LLMError("Gemini API key is not configured")
 
+        parts: list[dict[str, Any]] = [{"text": user_prompt}]
+        parts.extend(
+            {
+                "inlineData": {
+                    "mimeType": image.mime_type,
+                    "data": base64.b64encode(image.data).decode("ascii"),
+                }
+            }
+            for image in images
+        )
         payload = {
             "systemInstruction": {"parts": [{"text": system_prompt}]},
-            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "contents": [{"role": "user", "parts": parts}],
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "responseSchema": response_schema,

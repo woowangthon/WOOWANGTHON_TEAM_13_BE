@@ -53,6 +53,20 @@ class RecipeIngredient(RecipeSchema):
         return _strip_required(value)
 
 
+class RecipeScanIngredient(RecipeSchema):
+    name: str
+    amount: str | None
+
+
+class RecipeScanResponse(RecipeSchema):
+    name: str
+    category: str | None
+    temp: RecipeTemp | None
+    size: str | None
+    ingredients: list[RecipeScanIngredient]
+    steps: list[str]
+
+
 class RecipeCreateRequest(RecipeSchema):
     name: str = Field(min_length=1, max_length=100)
     category: str = Field(min_length=1, max_length=50)
