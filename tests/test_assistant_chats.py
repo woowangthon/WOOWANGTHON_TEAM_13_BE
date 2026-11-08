@@ -4,16 +4,25 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.v1.assistant_chats import get_assistant_chat_service, router
+from app.api.v1.assistant_chats import (
+    get_assistant_chat_service,
+    get_owner_question_service,
+    router,
+)
 from app.api.v1.users import get_user_service
 from app.app import app
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.integrations.llm import LLMError
 from app.models.assistant_chat import AssistantChat, AssistantMessage
+from app.models.owner_question import OwnerQuestion
 from app.models.user import User
 from app.services.assistant_chat import (
     AssistantChatNotFoundError,
     AssistantMessageNotFoundError,
+)
+from app.services.owner_question import (
+    OwnerQuestionAlreadySentError,
+    OwnerQuestionNotAllowedError,
 )
 from app.services.store import StoreNotFoundError
 
@@ -119,8 +128,50 @@ class StubChatService:
         return [make_message("staff", "질문", None)], True
 
 
+class StubOwnerQuestionService:
+    def __init__(self) -> None:
+        self.error: Exception | None = None
+        self.asked: dict[UUID, OwnerQuestion] = {}
+
+    async def questions_for_messages(
+        self,
+        messages: list[AssistantMessage],
+    ) -> dict[UUID, OwnerQuestion]:
+        return {
+            message.id: self.asked[message.id]
+            for message in messages
+            if message.id in self.asked
+        }
+
+    async def ask(
+        self,
+        store_id: UUID,
+        chat_id: UUID,
+        message_id: UUID,
+        user_id: UUID,
+    ) -> tuple[OwnerQuestion, AssistantMessage]:
+        if self.error is not None:
+            raise self.error
+        question = OwnerQuestion(
+            id=uuid4(),
+            store_id=store_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            asked_by=user_id,
+            question="우산 빌려줘도 돼요?",
+            status="asked",
+            created_at=datetime.now(UTC),
+        )
+        return question, make_message("system", "사장님께 전달했어요", None)
+
+
+OWNER_QUESTIONS = StubOwnerQuestionService()
+
+
 def make_client() -> tuple[TestClient, StubChatService]:
     service = StubChatService()
+    OWNER_QUESTIONS.error = None
+    OWNER_QUESTIONS.asked = {}
     test_app = FastAPI()
     test_app.include_router(router)
 
@@ -130,6 +181,9 @@ def make_client() -> tuple[TestClient, StubChatService]:
     test_app.dependency_overrides[get_current_user] = authenticated_user
     test_app.dependency_overrides[get_user_service] = StubUserService
     test_app.dependency_overrides[get_assistant_chat_service] = lambda: service
+    test_app.dependency_overrides[get_owner_question_service] = (
+        lambda: OWNER_QUESTIONS
+    )
     return TestClient(test_app), service
 
 
@@ -256,3 +310,109 @@ def test_delete_chat() -> None:
 
     assert response.status_code == 204
     assert service.deleted is True
+
+
+def test_not_found_answer_can_ask_owner() -> None:
+    client, service = make_client()
+
+    async def not_found_exchange(
+        store_id: UUID,
+        chat_id: UUID,
+        user_id: UUID,
+        text: str,
+    ) -> tuple[AssistantMessage, AssistantMessage]:
+        return (
+            make_message("staff", text, None),
+            make_message("ai", "매뉴얼에서 찾지 못했어요.", "not_found"),
+        )
+
+    service.send_message = not_found_exchange  # type: ignore[method-assign]
+
+    response = client.post(
+        chats_url(f"/{service.chat.id}/messages"),
+        json={"text": "우산 빌려줘도 돼요?"},
+    )
+
+    assert response.json()["answer"]["canAskOwner"] is True
+    assert response.json()["question"]["canAskOwner"] is False
+
+
+def test_list_messages_shows_owner_question_status() -> None:
+    client, service = make_client()
+    answer = make_message("ai", "매뉴얼에서 찾지 못했어요.", "not_found")
+    fresh = make_message("ai", "매뉴얼에서 찾지 못했어요.", "not_found")
+    question_id = uuid4()
+    OWNER_QUESTIONS.asked[answer.id] = OwnerQuestion(
+        id=question_id,
+        message_id=answer.id,
+        status="answered",
+    )
+
+    async def list_messages(
+        *args: object,
+    ) -> tuple[list[AssistantMessage], bool]:
+        return [answer, fresh], False
+
+    service.list_messages = list_messages  # type: ignore[method-assign]
+
+    messages = client.get(chats_url(f"/{service.chat.id}/messages")).json()[
+        "messages"
+    ]
+
+    assert messages[0]["canAskOwner"] is False
+    assert messages[0]["ownerQuestion"] == {
+        "ownerQuestionId": str(question_id),
+        "status": "answered",
+    }
+    assert messages[1]["canAskOwner"] is True
+    assert messages[1]["ownerQuestion"] is None
+
+
+def owner_question_url(service: StubChatService) -> str:
+    return chats_url(f"/{service.chat.id}/messages/{uuid4()}/owner-questions")
+
+
+def test_ask_owner_returns_question_and_system_message() -> None:
+    client, service = make_client()
+
+    response = client.post(owner_question_url(service))
+
+    assert response.status_code == 201
+    body = response.json()
+    assert set(body) == {
+        "ownerQuestionId",
+        "status",
+        "question",
+        "createdAt",
+        "systemMessage",
+    }
+    assert body["status"] == "asked"
+    assert body["question"] == "우산 빌려줘도 돼요?"
+    assert body["systemMessage"]["sender"] == "system"
+    assert body["systemMessage"]["canAskOwner"] is False
+
+
+def test_ask_owner_error_codes() -> None:
+    client, service = make_client()
+
+    OWNER_QUESTIONS.error = OwnerQuestionNotAllowedError()
+    not_allowed = client.post(owner_question_url(service))
+    OWNER_QUESTIONS.error = OwnerQuestionAlreadySentError()
+    already_sent = client.post(owner_question_url(service))
+    OWNER_QUESTIONS.error = AssistantMessageNotFoundError()
+    missing = client.post(owner_question_url(service))
+
+    assert not_allowed.status_code == 422
+    assert not_allowed.json()["code"] == "OWNER_QUESTION_NOT_ALLOWED"
+    assert already_sent.status_code == 409
+    assert already_sent.json()["code"] == "OWNER_QUESTION_ALREADY_SENT"
+    assert missing.status_code == 404
+
+
+def test_ask_owner_route_is_registered() -> None:
+    paths = app.openapi()["paths"]
+
+    assert (
+        "/api/v1/stores/{store_id}/assistant-chats/{chat_id}/messages/"
+        "{message_id}/owner-questions"
+    ) in paths

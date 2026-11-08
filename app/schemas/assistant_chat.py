@@ -37,6 +37,11 @@ class AssistantSource(AssistantChatSchema):
     title: str
 
 
+class OwnerQuestionRef(AssistantChatSchema):
+    owner_question_id: UUID
+    status: str
+
+
 class AssistantMessageResponse(AssistantChatSchema):
     message_id: UUID
     sender: str
@@ -44,8 +49,16 @@ class AssistantMessageResponse(AssistantChatSchema):
     answer_type: str | None
     sources: list[AssistantSource]
     can_ask_owner: bool
-    owner_question: dict[str, str] | None
+    owner_question: OwnerQuestionRef | None
     created_at: datetime
+
+
+class OwnerQuestionCreateResponse(AssistantChatSchema):
+    owner_question_id: UUID
+    status: str
+    question: str
+    created_at: datetime
+    system_message: AssistantMessageResponse
 
 
 class AssistantExchangeResponse(AssistantChatSchema):
