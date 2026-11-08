@@ -11,12 +11,15 @@ from app.models.assistant_chat import AssistantChat, AssistantMessage
 from app.models.manual import Manual
 from app.models.recipe import Recipe
 from app.services.assistant_chat import (
+    HISTORY_LIMIT,
+    HISTORY_TEXT_MAX_LENGTH,
     NOT_FOUND_TEXT,
     OUT_OF_SCOPE_TEXT,
     AssistantChatNotFoundError,
     AssistantChatService,
     AssistantDocument,
     AssistantMessageNotFoundError,
+    build_history,
     interpret_answer,
 )
 from app.services.store import StoreNotFoundError
@@ -392,3 +395,78 @@ async def test_unknown_cursor_is_not_found(harness: Harness) -> None:
 
     with pytest.raises(AssistantMessageNotFoundError):
         await harness.service.list_messages(STORE_ID, chat.id, USER_ID, uuid4(), 50)
+
+
+def history_message(
+    chat: AssistantChat,
+    sender: str,
+    text: str,
+    seconds: int,
+) -> AssistantMessage:
+    return AssistantMessage(
+        id=uuid4(),
+        chat_id=chat.id,
+        sender=sender,
+        text=text,
+        answer_type=None,
+        sources=[],
+        created_at=datetime(2026, 11, 8, tzinfo=UTC) + timedelta(seconds=seconds),
+    )
+
+
+async def test_prompt_includes_recent_history_oldest_first(harness: Harness) -> None:
+    chat = await harness.chat()
+    harness.repository.messages.extend(
+        [
+            history_message(chat, "staff", "딸기라떼 레시피 알려줘", 1),
+            history_message(chat, "ai", "딸기청 3스푼이에요", 2),
+            history_message(chat, "system", "사장님께 전달했어요", 3),
+            history_message(chat, "owner", "우산은 빌려주세요", 4),
+        ]
+    )
+    harness.llm.result = {"answerType": "not_found", "text": "", "sourceIds": []}
+
+    await harness.service.send_message(STORE_ID, chat.id, USER_ID, "그럼 따뜻한 건?")
+
+    prompt = json.loads(harness.llm.prompts[0])
+    assert prompt["question"] == "그럼 따뜻한 건?"
+    assert prompt["history"] == [
+        {"role": "staff", "text": "딸기라떼 레시피 알려줘"},
+        {"role": "assistant", "text": "딸기청 3스푼이에요"},
+        {"role": "owner", "text": "우산은 빌려주세요"},
+    ]
+
+
+async def test_history_is_limited_to_recent_messages(harness: Harness) -> None:
+    chat = await harness.chat()
+    harness.repository.messages.extend(
+        history_message(chat, "staff", f"질문 {index}", index) for index in range(10)
+    )
+    harness.llm.result = {"answerType": "not_found", "text": "", "sourceIds": []}
+
+    await harness.service.send_message(STORE_ID, chat.id, USER_ID, "새 질문")
+
+    history = json.loads(harness.llm.prompts[0])["history"]
+    assert [item["text"] for item in history] == [
+        f"질문 {index}" for index in range(10 - HISTORY_LIMIT, 10)
+    ]
+
+
+async def test_history_excludes_other_chats(harness: Harness) -> None:
+    chat = await harness.chat()
+    other = await harness.chat()
+    harness.repository.messages.append(history_message(other, "staff", "다른 방", 1))
+    harness.llm.result = {"answerType": "not_found", "text": "", "sourceIds": []}
+
+    await harness.service.send_message(STORE_ID, chat.id, USER_ID, "질문")
+
+    assert json.loads(harness.llm.prompts[0])["history"] == []
+
+
+def test_build_history_truncates_long_text() -> None:
+    chat = AssistantChat(id=uuid4())
+    message = history_message(chat, "staff", "가" * 500, 0)
+
+    history = build_history([message])
+
+    assert history == [{"role": "staff", "text": "가" * HISTORY_TEXT_MAX_LENGTH}]
