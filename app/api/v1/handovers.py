@@ -13,6 +13,7 @@ from app.integrations.llm import LLMClient, LLMError
 from app.models.handover import HandoverItem, HandoverNote
 from app.models.user import User
 from app.repositories.handover import HandoverRepository
+from app.repositories.membership import MembershipRepository
 from app.repositories.store import StoreRepository
 from app.schemas.handover import (
     HandoverConfirmationRequest,
@@ -45,7 +46,10 @@ def get_handover_service(
     """요청에 사용할 인수인계 서비스를 생성합니다."""
     return HandoverService(
         HandoverRepository(session),
-        StoreAccessService(StoreRepository(session)),
+        StoreAccessService(
+            StoreRepository(session),
+            MembershipRepository(session),
+        ),
         llm,
     )
 

@@ -21,6 +21,7 @@ from app.services.handover import (
     today_kst,
 )
 from app.services.store import StoreNotFoundError
+from app.services.store_access import StoreAccessForbiddenError
 
 STORE_ID = uuid4()
 OWNER_ID = uuid4()
@@ -74,8 +75,9 @@ class FakeHandoverRepository:
 
 class FakeStoreAccess:
     async def ensure_owner(self, store_id: UUID, user_id: UUID) -> None:
-        if store_id != STORE_ID or user_id != OWNER_ID:
-            raise StoreNotFoundError
+        await self.ensure_member(store_id, user_id)
+        if user_id != OWNER_ID:
+            raise StoreAccessForbiddenError
 
     async def ensure_member(self, store_id: UUID, user_id: UUID) -> None:
         if store_id != STORE_ID or user_id not in (

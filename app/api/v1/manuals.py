@@ -23,6 +23,7 @@ from app.db.session import get_db
 from app.models.manual import Manual
 from app.models.user import User
 from app.repositories.manual import ManualRepository
+from app.repositories.membership import MembershipRepository
 from app.repositories.store import StoreRepository
 from app.schemas.manual import (
     ManualCategoryCreateRequest,
@@ -41,7 +42,10 @@ from app.services.manual import (
     ManualService,
 )
 from app.services.store import StoreNotFoundError
-from app.services.store_access import StoreAccessService
+from app.services.store_access import (
+    StoreAccessForbiddenError,
+    StoreAccessService,
+)
 
 router = APIRouter(prefix="/stores/{store_id}", tags=["manuals"])
 
@@ -54,7 +58,10 @@ def get_manual_service(
     """요청에 사용할 매뉴얼 서비스를 생성합니다."""
     return ManualService(
         ManualRepository(session),
-        StoreAccessService(StoreRepository(session)),
+        StoreAccessService(
+            StoreRepository(session),
+            MembershipRepository(session),
+        ),
     )
 
 
@@ -80,6 +87,11 @@ def _translate_errors() -> Iterator[None]:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Store not found",
+        ) from None
+    except StoreAccessForbiddenError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Owner permission required",
         ) from None
     except ManualNotFoundError:
         raise HTTPException(
