@@ -13,6 +13,7 @@ from app.models.assistant_chat import AssistantChat, AssistantMessage
 from app.models.user import User
 from app.repositories.assistant_chat import AssistantChatRepository
 from app.repositories.manual import ManualRepository
+from app.repositories.membership import MembershipRepository
 from app.repositories.recipe import RecipeRepository
 from app.repositories.store import StoreRepository
 from app.schemas.assistant_chat import (
@@ -48,7 +49,10 @@ def get_assistant_chat_service(
         AssistantChatRepository(session),
         ManualRepository(session),
         RecipeRepository(session),
-        StoreAccessService(StoreRepository(session)),
+        StoreAccessService(
+            StoreRepository(session),
+            MembershipRepository(session),
+        ),
         llm,
     )
 

@@ -40,6 +40,25 @@ class MembershipRepository:
         stores.extend((store, "staff") for store in staff_result.scalars().all())
         return stores
 
+    async def get_active_by_store_and_user_id(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+    ) -> Membership | None:
+        """삭제되지 않은 매장의 재직 중인 구성원을 조회합니다."""
+        query = (
+            select(Membership)
+            .join(Store, Store.id == Membership.store_id)
+            .where(
+                Membership.store_id == store_id,
+                Membership.user_id == user_id,
+                Membership.left_at.is_(None),
+                Store.deleted_at.is_(None),
+            )
+        )
+        result = await self._session.execute(query)
+        return result.scalar_one_or_none()
+
     async def list_by_store_id(self, store_id: UUID) -> list[Membership]:
         query = (
             select(Membership)

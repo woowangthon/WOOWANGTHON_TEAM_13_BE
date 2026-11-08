@@ -23,6 +23,7 @@ from app.services.manual import (
     ManualTemplate,
 )
 from app.services.store import StoreNotFoundError
+from app.services.store_access import StoreAccessForbiddenError
 from app.services.user import InactiveUserError
 
 STORE_ID = uuid4()
@@ -254,6 +255,16 @@ def test_inaccessible_store_returns_404() -> None:
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Store not found"
+
+
+def test_staff_write_returns_403() -> None:
+    client, _, service = make_client()
+    service.error = StoreAccessForbiddenError()
+
+    response = client.delete(manuals_url(f"/{service.manual.id}"))
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Owner permission required"
 
 
 def test_withdrawn_user_returns_403() -> None:

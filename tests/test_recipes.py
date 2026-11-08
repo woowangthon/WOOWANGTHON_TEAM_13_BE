@@ -14,6 +14,7 @@ from app.models.user import User
 from app.schemas.recipe import RecipeCreateRequest, RecipeUpdateRequest
 from app.services.recipe import RecipeNotFoundError
 from app.services.store import StoreNotFoundError
+from app.services.store_access import StoreAccessForbiddenError
 
 STORE_ID = uuid4()
 VALID_RECIPE = {
@@ -218,6 +219,16 @@ def test_inaccessible_store_returns_404() -> None:
     response = client.get(recipes_url())
 
     assert response.status_code == 404
+
+
+def test_staff_write_returns_403() -> None:
+    client, service = make_client()
+    service.error = StoreAccessForbiddenError()
+
+    response = client.delete(recipes_url(f"/{service.recipe.id}"))
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Owner permission required"
 
 
 def test_update_recipe() -> None:
