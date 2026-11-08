@@ -10,7 +10,6 @@ from app.api.v1.users import get_membership_service, get_user_service
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.db.session import get_db
 from app.models.invitation import Invitation
-from app.models.membership import Membership
 from app.models.user import User
 from app.repositories.invitation import InvitationRepository
 from app.schemas.invitation import (
@@ -40,6 +39,7 @@ from app.services.membership import (
     MemberAlreadyLeftError,
     MemberNotFoundError,
     MembershipService,
+    MemberWithInvitation,
 )
 from app.services.store import StoreNotFoundError, StoreService
 from app.services.user import InactiveUserError, UserService
@@ -146,9 +146,11 @@ def _invitation_summary(invitation: Invitation) -> InvitationSummaryResponse:
     )
 
 
-def _member_response(membership: Membership) -> MemberResponse:
+def _member_response(member: MemberWithInvitation) -> MemberResponse:
+    membership = member.membership
     return MemberResponse(
         member_id=membership.id,
+        invitation_id=member.invitation_id,
         user_id=membership.user_id,
         staff_name=membership.staff_name,
         role=membership.role,

@@ -1,5 +1,5 @@
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+from app.models.invitation import Invitation
 from app.models.membership import Membership
 from app.models.store import Store
 from app.models.user import User
@@ -30,8 +31,17 @@ class SyncSessionAdapter:
 @pytest.fixture
 def session() -> Iterator[Session]:
     engine = create_engine("sqlite://", poolclass=StaticPool)
-    tables = [User.__table__, Store.__table__, Membership.__table__]
+    tables = [
+        User.__table__,
+        Store.__table__,
+        Membership.__table__,
+        Invitation.__table__,
+    ]
     User.metadata.create_all(engine, tables=tables)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "DROP INDEX uq_invitations_available_store_staff_name"
+        )
     with Session(engine) as db_session:
         yield db_session
     engine.dispose()
@@ -117,3 +127,76 @@ async def test_does_not_match_another_store(session: Session) -> None:
     )
 
     assert found is None
+
+
+async def test_lists_same_name_members_with_their_own_invitation(
+    session: Session,
+) -> None:
+    store_id = uuid4()
+    owner_id = uuid4()
+    first_user_id = uuid4()
+    second_user_id = uuid4()
+    first_invitation_id = uuid4()
+    second_invitation_id = uuid4()
+    second_joined_at = NOW + timedelta(hours=1)
+    session.add(
+        Store(
+            id=store_id,
+            owner_id=owner_id,
+            name="매장",
+            address="주소",
+        )
+    )
+    session.add_all(
+        [
+            Membership(
+                store_id=store_id,
+                user_id=first_user_id,
+                role="staff",
+                staff_name="동명이인",
+                hourly_wage=10_320,
+                joined_at=NOW,
+            ),
+            Membership(
+                store_id=store_id,
+                user_id=second_user_id,
+                role="staff",
+                staff_name="동명이인",
+                hourly_wage=11_000,
+                joined_at=second_joined_at,
+            ),
+            Invitation(
+                id=first_invitation_id,
+                store_id=store_id,
+                created_by_user_id=owner_id,
+                code="FIRST1",
+                staff_name="동명이인",
+                hourly_wage=10_320,
+                created_at=NOW,
+                accepted_at=NOW,
+                accepted_by_user_id=first_user_id,
+            ),
+            Invitation(
+                id=second_invitation_id,
+                store_id=store_id,
+                created_by_user_id=owner_id,
+                code="SECOND",
+                staff_name="동명이인",
+                hourly_wage=11_000,
+                created_at=second_joined_at,
+                accepted_at=second_joined_at,
+                accepted_by_user_id=second_user_id,
+            ),
+        ]
+    )
+    session.commit()
+
+    members = await repository(session).list_by_store_id(store_id)
+
+    assert [
+        (membership.user_id, invitation_id)
+        for membership, invitation_id in members
+    ] == [
+        (second_user_id, second_invitation_id),
+        (first_user_id, first_invitation_id),
+    ]
