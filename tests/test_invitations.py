@@ -22,6 +22,7 @@ from app.services.invitation import (
     InvitationLockedError,
     VerifiedInvitation,
 )
+from app.services.membership import MemberWithInvitation
 from app.services.store import StoreNotFoundError
 
 
@@ -108,7 +109,8 @@ class StubInvitationService:
 
 
 class StubMembershipService:
-    def __init__(self, store: Store) -> None:
+    def __init__(self, store: Store, invitation_id: UUID) -> None:
+        self.invitation_id = invitation_id
         self.membership = Membership(
             id=uuid4(),
             store_id=store.id,
@@ -119,15 +121,18 @@ class StubMembershipService:
             joined_at=datetime.now(UTC),
         )
 
-    async def list_members(self, store_id: UUID) -> list[Membership]:
-        return [self.membership]
+    async def list_members(
+        self,
+        store_id: UUID,
+    ) -> list[MemberWithInvitation]:
+        return [MemberWithInvitation(self.membership, self.invitation_id)]
 
     async def get_member(
         self,
         store_id: UUID,
         member_id: UUID,
-    ) -> Membership:
-        return self.membership
+    ) -> MemberWithInvitation:
+        return MemberWithInvitation(self.membership, self.invitation_id)
 
     async def leave(self, store_id: UUID, member_id: UUID) -> Membership:
         self.membership.left_at = datetime.now(UTC)
@@ -154,7 +159,10 @@ def create_client() -> tuple[TestClient, StubInvitationService]:
     user_service = StubUserService(owner)
     store_service = StubStoreService(store)
     invitation_service = StubInvitationService(store, owner)
-    membership_service = StubMembershipService(store)
+    membership_service = StubMembershipService(
+        store,
+        invitation_service.invitation.id,
+    )
     invitation_service.membership_service = membership_service
 
     async def authenticated_user() -> AuthenticatedUser:
@@ -360,6 +368,9 @@ def test_owner_lists_members() -> None:
     response = client.get(f"/api/v1/stores/{service.store.id}/members")
 
     assert response.status_code == 200
+    assert response.json()["members"][0]["invitationId"] == str(
+        service.invitation.id
+    )
     assert response.json()["members"][0]["staffName"] == "지은"
     assert response.json()["members"][0]["status"] == "ACTIVE"
 
@@ -374,6 +385,7 @@ def test_owner_gets_member_detail() -> None:
 
     assert response.status_code == 200
     assert response.json()["memberId"] == str(membership.id)
+    assert response.json()["invitationId"] == str(service.invitation.id)
     assert response.json()["hourlyWage"] == 10_320
 
 

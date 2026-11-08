@@ -23,6 +23,7 @@ MemberStatus = Literal["ACTIVE", "LEFT"]
 
 class MemberResponse(MembershipSchema):
     member_id: UUID
+    invitation_id: UUID | None
     user_id: UUID
     staff_name: str
     role: str

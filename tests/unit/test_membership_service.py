@@ -14,26 +14,30 @@ from app.services.membership import (
 class FakeMembershipRepository:
     def __init__(self, membership: Membership | None = None) -> None:
         self.membership = membership
+        self.invitation_id = uuid4()
 
     async def list_store_roles_for_user(self, user_id: UUID) -> list[object]:
         return []
 
-    async def list_by_store_id(self, store_id: UUID) -> list[Membership]:
+    async def list_by_store_id(
+        self,
+        store_id: UUID,
+    ) -> list[tuple[Membership, UUID | None]]:
         if self.membership is None or self.membership.store_id != store_id:
             return []
-        return [self.membership]
+        return [(self.membership, self.invitation_id)]
 
     async def get_by_id_and_store_id(
         self,
         member_id: UUID,
         store_id: UUID,
-    ) -> Membership | None:
+    ) -> tuple[Membership, UUID | None] | None:
         if (
             self.membership is not None
             and self.membership.id == member_id
             and self.membership.store_id == store_id
         ):
-            return self.membership
+            return self.membership, self.invitation_id
         return None
 
     async def leave(

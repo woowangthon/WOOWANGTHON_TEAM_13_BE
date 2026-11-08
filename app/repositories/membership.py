@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.invitation import Invitation
 from app.models.membership import Membership
 from app.models.store import Store
 
@@ -58,26 +59,52 @@ class MembershipRepository:
         result = await self._session.execute(query)
         return result.scalar_one_or_none()
 
-    async def list_by_store_id(self, store_id: UUID) -> list[Membership]:
+    def _accepted_invitation_id(self):
+        return (
+            select(Invitation.id)
+            .where(
+                Invitation.store_id == Membership.store_id,
+                Invitation.accepted_by_user_id == Membership.user_id,
+                Invitation.accepted_at.is_not(None),
+            )
+            .order_by(Invitation.accepted_at.desc(), Invitation.id.desc())
+            .limit(1)
+            .correlate(Membership)
+            .scalar_subquery()
+        )
+
+    async def list_by_store_id(
+        self,
+        store_id: UUID,
+    ) -> list[tuple[Membership, UUID | None]]:
         query = (
-            select(Membership)
+            select(
+                Membership,
+                self._accepted_invitation_id().label("invitation_id"),
+            )
             .where(Membership.store_id == store_id)
             .order_by(Membership.joined_at.desc(), Membership.id.desc())
         )
         result = await self._session.execute(query)
-        return list(result.scalars().all())
+        return [(row[0], row[1]) for row in result.all()]
 
     async def get_by_id_and_store_id(
         self,
         member_id: UUID,
         store_id: UUID,
-    ) -> Membership | None:
-        query = select(Membership).where(
+    ) -> tuple[Membership, UUID | None] | None:
+        query = select(
+            Membership,
+            self._accepted_invitation_id().label("invitation_id"),
+        ).where(
             Membership.id == member_id,
             Membership.store_id == store_id,
         )
         result = await self._session.execute(query)
-        return result.scalar_one_or_none()
+        row = result.one_or_none()
+        if row is None:
+            return None
+        return row[0], row[1]
 
     async def leave(
         self,
