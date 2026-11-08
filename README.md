@@ -247,6 +247,27 @@ AI 사수는 현재 매장의 매뉴얼과 레시피만 근거로 답합니다. 
 | `POST` | `/api/v1/stores/{storeId}/assistant-chats/{chatId}/messages` | 질문 전송과 답변 |
 | `GET` | `/api/v1/stores/{storeId}/assistant-chats/{chatId}/messages` | 메시지 내역 조회 |
 
+## 사장님께 물어보기 API
+
+AI가 매뉴얼에서 답을 찾지 못한 답변(`not_found`)만 사장님께 넘길 수 있습니다. 넘긴
+답변은 메시지 응답의 `ownerQuestion`에 상태가 표시되고, 사장님이 답하면 알바생
+채팅에 `sender: "owner"` 메시지로 들어갑니다. 질문 목록과 답변은 사장님만 할 수
+있습니다. 답변을 매뉴얼에 추가하는 기능(`addToManual: true`)은 아직 지원하지 않아
+`501`을 반환합니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/v1/stores/{storeId}/assistant-chats/{chatId}/messages/{messageId}/owner-questions` | 질문 넘기기 |
+| `GET` | `/api/v1/stores/{storeId}/owner-questions?status=asked` | 사장님 질문 목록 |
+| `POST` | `/api/v1/stores/{storeId}/owner-questions/{questionId}/answer` | 사장님 답변 |
+
+| 상황 | 응답 |
+| --- | --- |
+| 이미 넘긴 답변 | `409 OWNER_QUESTION_ALREADY_SENT` |
+| `not_found`가 아닌 메시지 | `422 OWNER_QUESTION_NOT_ALLOWED` |
+| 이미 답한 질문 | `409 OWNER_QUESTION_ALREADY_ANSWERED` |
+| 매뉴얼 추가 요청 | `501 ADD_TO_MANUAL_NOT_SUPPORTED` |
+
 ## 인수인계 API
 
 인수인계 API는 모두 Supabase access token이 필요합니다. AI 초안은 저장되지 않고,
