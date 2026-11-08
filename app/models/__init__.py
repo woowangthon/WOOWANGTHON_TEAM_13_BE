@@ -8,6 +8,14 @@ from app.models.manual import Manual, ManualCategory
 from app.models.membership import Membership
 from app.models.owner_question import OwnerQuestion
 from app.models.recipe import Recipe
+from app.models.schedule import (
+    RecommendationAssignment,
+    RecommendationShift,
+    Schedule,
+    ScheduleAssignment,
+    ScheduleRecommendation,
+    ScheduleShift,
+)
 from app.models.store import Store
 from app.models.user import User
 
@@ -25,6 +33,12 @@ __all__ = [
     "Membership",
     "OwnerQuestion",
     "Recipe",
+    "RecommendationAssignment",
+    "RecommendationShift",
+    "Schedule",
+    "ScheduleAssignment",
+    "ScheduleRecommendation",
+    "ScheduleShift",
     "Store",
     "User",
 ]
