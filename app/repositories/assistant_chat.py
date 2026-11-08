@@ -74,6 +74,25 @@ class AssistantChatRepository:
         result = await self._session.execute(query)
         return result.scalar_one_or_none()
 
+    async def get_previous_staff_message(
+        self,
+        message: AssistantMessage,
+    ) -> AssistantMessage | None:
+        """AI 답변 직전에 알바생이 보낸 질문 메시지를 조회합니다."""
+        query = (
+            select(AssistantMessage)
+            .where(
+                AssistantMessage.chat_id == message.chat_id,
+                AssistantMessage.sender == "staff",
+                AssistantMessage.created_at <= message.created_at,
+                AssistantMessage.id != message.id,
+            )
+            .order_by(AssistantMessage.created_at.desc(), AssistantMessage.id.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(query)
+        return result.scalar_one_or_none()
+
     async def list_messages(
         self,
         chat_id: UUID,
