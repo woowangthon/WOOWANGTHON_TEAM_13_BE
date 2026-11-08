@@ -73,6 +73,21 @@ class MembershipRepository:
             .scalar_subquery()
         )
 
+    async def list_active_by_store_id(self, store_id: UUID) -> list[Membership]:
+        """삭제되지 않은 매장의 재직 중인 구성원을 가입 순서로 조회합니다."""
+        query = (
+            select(Membership)
+            .join(Store, Store.id == Membership.store_id)
+            .where(
+                Membership.store_id == store_id,
+                Membership.left_at.is_(None),
+                Store.deleted_at.is_(None),
+            )
+            .order_by(Membership.joined_at, Membership.id)
+        )
+        result = await self._session.execute(query)
+        return list(result.scalars().all())
+
     async def list_by_store_id(
         self,
         store_id: UUID,

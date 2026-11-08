@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.assistant_chats import router as assistant_chats_router
+from app.api.v1.availabilities import router as availabilities_router
 from app.api.v1.handovers import router as handovers_router
 from app.api.v1.health import router as health_router
 from app.api.v1.invitations import router as invitations_router
@@ -22,3 +23,4 @@ api_router.include_router(recipe_scans_router)
 api_router.include_router(assistant_chats_router)
 api_router.include_router(owner_questions_router)
 api_router.include_router(handovers_router)
+api_router.include_router(availabilities_router)

@@ -150,6 +150,26 @@ POST /api/v1/memberships/join
 초대 코드로 다시 가입하면 기존 멤버십을 활성화하고 직원명과 시급을 새 초대
 조건으로 갱신합니다.
 
+## 근무 가능 시간 API
+
+재직 중인 알바생은 다음 근무 대상 월의 날짜를 `available` 또는 `unavailable`로
+표시하고 메모와 함께 제출할 수 있습니다. 기본 접수 대상은 다음 달이며 전월
+25일에 마감합니다. 25일이 지나면 그다음 달 접수로 넘어갑니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/api/v1/stores/{storeId}/availabilities/me` | 현재 접수 월과 내 제출 조회 |
+| `POST` | `/api/v1/stores/{storeId}/availabilities` | 근무 가능 시간 최초 제출 |
+| `PATCH` | `/api/v1/stores/{storeId}/availabilities/{availabilityId}` | 마감 전 제출 수정 |
+| `DELETE` | `/api/v1/stores/{storeId}/availabilities/{availabilityId}` | 내 제출 삭제 |
+| `GET` | `/api/v1/stores/{storeId}/availabilities?month=YYYY-MM` | 사장님의 월별 제출 목록 조회 |
+| `GET` | `/api/v1/stores/{storeId}/availability-submissions?month=YYYY-MM` | 사장님의 월별 제출 현황 조회 |
+
+처음 제출하기 전에도 `GET .../availabilities/me`는 `availabilityId`와
+`submittedAt`이 `null`인 현재 접수 정보를 반환합니다. 같은 구성원의 같은 월
+중복 제출은 `409 AVAILABILITY_EXISTS`, 마감 이후 등록·수정은
+`409 AVAILABILITY_CLOSED`를 반환합니다.
+
 ## 사용자 정보 API
 
 사용자 정보 API는 모두 Supabase access token이 필요합니다. 첫
