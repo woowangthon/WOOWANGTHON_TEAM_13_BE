@@ -17,6 +17,7 @@ from app.services.recipe_scan import (
     RecipeScanIngredientDraft,
 )
 from app.services.store import StoreNotFoundError
+from app.services.store_access import StoreAccessForbiddenError
 
 STORE_ID = uuid4()
 URL = f"/stores/{STORE_ID}/recipe-scans"
@@ -93,6 +94,7 @@ def test_missing_image_is_422(client: TestClient) -> None:
     ("error", "status_code"),
     [
         (StoreNotFoundError(), 404),
+        (StoreAccessForbiddenError(), 403),
         (RecipeImageTypeError(), 415),
         (RecipeImageSizeError(), 413),
         (RecipeImageUnreadableError(), 422),

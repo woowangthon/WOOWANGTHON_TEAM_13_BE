@@ -10,6 +10,7 @@ from app.api.dependencies import get_active_user, get_llm_client
 from app.db.session import get_db
 from app.integrations.llm import LLMClient, LLMError
 from app.models.user import User
+from app.repositories.membership import MembershipRepository
 from app.repositories.store import StoreRepository
 from app.schemas.recipe import RecipeScanResponse
 from app.services.recipe_scan import (
@@ -20,7 +21,10 @@ from app.services.recipe_scan import (
     RecipeScanService,
 )
 from app.services.store import StoreNotFoundError
-from app.services.store_access import StoreAccessService
+from app.services.store_access import (
+    StoreAccessForbiddenError,
+    StoreAccessService,
+)
 
 router = APIRouter(prefix="/stores/{store_id}/recipe-scans", tags=["recipes"])
 
@@ -30,7 +34,11 @@ def get_recipe_scan_service(
     llm: Annotated[LLMClient, Depends(get_llm_client)],
 ) -> RecipeScanService:
     """요청에 사용할 레시피 스캔 서비스를 생성합니다."""
-    return RecipeScanService(StoreAccessService(StoreRepository(session)), llm)
+    store_access = StoreAccessService(
+        StoreRepository(session),
+        MembershipRepository(session),
+    )
+    return RecipeScanService(store_access, llm)
 
 
 @contextmanager
@@ -42,6 +50,11 @@ def _translate_errors() -> Iterator[None]:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Store not found",
+        ) from None
+    except StoreAccessForbiddenError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Owner permission required",
         ) from None
     except RecipeImageTypeError:
         raise HTTPException(

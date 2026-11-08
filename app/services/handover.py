@@ -13,8 +13,10 @@ from app.schemas.handover import (
     HandoverNoteCreateRequest,
     HandoverNoteUpdateRequest,
 )
-from app.services.store import StoreNotFoundError
-from app.services.store_access import StoreAccessProtocol
+from app.services.store_access import (
+    StoreAccessForbiddenError,
+    StoreAccessProtocol,
+)
 
 KST = timezone(timedelta(hours=9))
 ITEM_TAGS = ("credit", "stock", "etc")
@@ -134,7 +136,7 @@ class HandoverService:
             return
         try:
             await self._store_access.ensure_owner(note.store_id, user_id)
-        except StoreNotFoundError:
+        except StoreAccessForbiddenError:
             raise HandoverForbiddenError from None
 
     async def create_draft(
