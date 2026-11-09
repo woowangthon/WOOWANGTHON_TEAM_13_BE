@@ -1,3 +1,4 @@
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -23,12 +24,16 @@ class StoreSchema(BaseModel):
     )
 
 
+BusinessSize = Literal["UNDER_FIVE", "FIVE_OR_MORE"]
+
+
 class StoreCreateRequest(StoreSchema):
     name: str = Field(min_length=1, max_length=100)
     address: str = Field(min_length=1, max_length=255)
     business_verification_id: int | None = Field(default=None, gt=0)
     photo_url: str | None = Field(default=None, max_length=2048)
     payday: int | None = None
+    business_size: BusinessSize | None = None
 
     @field_validator("name", "address")
     @classmethod
@@ -60,6 +65,7 @@ class StoreUpdateRequest(StoreSchema):
     business_verification_id: int | None = Field(default=None, gt=0)
     photo_url: str | None = Field(default=None, max_length=2048)
     payday: int | None = None
+    business_size: BusinessSize | None = None
 
     @field_validator("name", "address")
     @classmethod
@@ -99,6 +105,7 @@ class StoreResponse(StoreSchema):
     business_verification_id: int | None
     photo_url: str | None
     payday: int | None
+    business_size: BusinessSize | None
 
 
 class StoreListResponse(StoreSchema):

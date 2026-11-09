@@ -25,6 +25,11 @@ class Store(Base):
             "payday IS NULL OR payday BETWEEN 1 AND 28 OR payday = 31",
             name="ck_stores_payday",
         ),
+        CheckConstraint(
+            "business_size IS NULL OR "
+            "business_size IN ('UNDER_FIVE', 'FIVE_OR_MORE')",
+            name="ck_stores_business_size",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -42,6 +47,7 @@ class Store(Base):
     )
     photo_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     payday: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    business_size: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
