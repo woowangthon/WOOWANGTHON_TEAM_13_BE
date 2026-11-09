@@ -170,6 +170,61 @@ POST /api/v1/memberships/join
 중복 제출은 `409 AVAILABILITY_EXISTS`, 마감 이후 등록·수정은
 `409 AVAILABILITY_CLOSED`를 반환합니다.
 
+최초 제출 예시:
+
+```json
+{
+  "month": "2026-12",
+  "days": [
+    { "date": "2026-12-01", "status": "available" },
+    { "date": "2026-12-02", "status": "unavailable" }
+  ],
+  "memo": "화요일은 수업 때문에 근무가 어려워요"
+}
+```
+
+## 추천 및 확정 스케줄 API
+
+추천 스케줄은 LLM이 아니라 제출된 가능 일자, 주 최대 근무시간, 중복 근무와
+최소 휴식시간을 계산하는 규칙 엔진으로 생성합니다. 같은 시간대에 배정 가능한
+직원이 여러 명이면 우선순위를 순환하여 최대 3개의 서로 다른 후보를 반환합니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/v1/stores/{storeId}/schedule-recommendations` | 추천 후보 생성 |
+| `GET` | `/api/v1/stores/{storeId}/schedule-recommendations` | 추천 후보 목록 조회 |
+| `GET` | `/api/v1/stores/{storeId}/schedule-recommendations/{recommendationId}` | 추천 후보 상세 조회 |
+| `POST` | `/api/v1/stores/{storeId}/schedules` | 후보를 실제 스케줄로 등록 |
+| `GET` | `/api/v1/stores/{storeId}/schedules` | 매장 스케줄 조회 |
+| `PATCH` | `/api/v1/stores/{storeId}/schedules/{scheduleId}` | 배정 조정 및 공개 상태 변경 |
+| `GET` | `/api/v1/stores/{storeId}/schedules/me` | 공개된 내 근무표 조회 |
+
+추천 생성 요청의 `shifts`에는 사장님이 필요한 날짜·시간대·인원을 입력합니다.
+근무 가능 시간을 제출하지 않은 직원, `unavailable`로 표시한 날짜, 아무 상태도
+표시하지 않은 날짜에는 배정하지 않습니다. 인원이 부족해도 후보를 저장하고 상세
+응답의 `warnings`로 알려 줍니다.
+
+```json
+{
+  "startDate": "2026-12-01",
+  "endDate": "2026-12-07",
+  "recommendationCount": 3,
+  "shifts": [
+    {
+      "date": "2026-12-01",
+      "start": "09:00",
+      "end": "15:00",
+      "role": "오픈",
+      "requiredStaff": 2
+    }
+  ],
+  "rules": {
+    "maximumWeeklyHours": 40,
+    "minimumRestMinutes": 30
+  }
+}
+```
+
 ## 사용자 정보 API
 
 사용자 정보 API는 모두 Supabase access token이 필요합니다. 첫
