@@ -3,6 +3,12 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+def _validate_payday(value: int | None) -> int | None:
+    if value is not None and not (1 <= value <= 28 or value == 31):
+        raise ValueError("payday must be between 1 and 28, or 31")
+    return value
+
+
 def _to_camel(value: str) -> str:
     """응답 필드명을 camelCase로 변환합니다."""
     first, *rest = value.split("_")
@@ -22,6 +28,7 @@ class StoreCreateRequest(StoreSchema):
     address: str = Field(min_length=1, max_length=255)
     business_verification_id: int | None = Field(default=None, gt=0)
     photo_url: str | None = Field(default=None, max_length=2048)
+    payday: int | None = None
 
     @field_validator("name", "address")
     @classmethod
@@ -41,12 +48,18 @@ class StoreCreateRequest(StoreSchema):
         stripped = value.strip()
         return stripped or None
 
+    @field_validator("payday")
+    @classmethod
+    def validate_payday(cls, value: int | None) -> int | None:
+        return _validate_payday(value)
+
 
 class StoreUpdateRequest(StoreSchema):
     name: str | None = Field(default=None, max_length=100)
     address: str | None = Field(default=None, max_length=255)
     business_verification_id: int | None = Field(default=None, gt=0)
     photo_url: str | None = Field(default=None, max_length=2048)
+    payday: int | None = None
 
     @field_validator("name", "address")
     @classmethod
@@ -65,6 +78,11 @@ class StoreUpdateRequest(StoreSchema):
         stripped = value.strip()
         return stripped or None
 
+    @field_validator("payday")
+    @classmethod
+    def validate_payday(cls, value: int | None) -> int | None:
+        return _validate_payday(value)
+
     @model_validator(mode="after")
     def require_at_least_one_field(self) -> "StoreUpdateRequest":
         """수정할 필드가 하나 이상인지 검사합니다."""
@@ -80,6 +98,7 @@ class StoreResponse(StoreSchema):
     owner_name: str
     business_verification_id: int | None
     photo_url: str | None
+    payday: int | None
 
 
 class StoreListResponse(StoreSchema):

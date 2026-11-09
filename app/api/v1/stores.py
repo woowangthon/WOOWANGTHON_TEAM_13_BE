@@ -52,6 +52,7 @@ def _to_response(store: Store, owner_name: str) -> StoreResponse:
         owner_name=owner_name,
         business_verification_id=store.business_verification_id,
         photo_url=store.photo_url,
+        payday=store.payday,
     )
 
 

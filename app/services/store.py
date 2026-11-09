@@ -42,6 +42,7 @@ class StoreService:
             address=request.address,
             business_verification_id=request.business_verification_id,
             photo_url=request.photo_url,
+            payday=request.payday,
         )
         return await self._repository.create(store)
 
