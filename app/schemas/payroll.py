@@ -34,14 +34,12 @@ class PayrollWeekResponse(PayrollSchema):
     weekly_allowance: int
 
 
-class PayrollEstimateResponse(PayrollSchema):
-    store_id: UUID
-    month: str
+class PayrollEstimateSummary(PayrollSchema):
+    estimate_id: UUID
+    member_id: UUID
+    staff_name: str
     hourly_wage: int
-    payday: int | None
     tax_type: Literal["none", "3.3", "ins"]
-    weekly_allowance_enabled: bool
-    work_days: list[PayrollWorkDayResponse]
     hours: float
     base_pay: int
     weekly_allowance: int
@@ -49,5 +47,21 @@ class PayrollEstimateResponse(PayrollSchema):
     deduction: int
     net_pay: int
     weeks: list[PayrollWeekResponse]
+
+
+class PayrollEstimateResponse(PayrollEstimateSummary):
+    store_id: UUID
+    month: str
+    payday: int | None
+    weekly_allowance_enabled: bool
+    work_days: list[PayrollWorkDayResponse]
     ai_note: str | None
+    is_estimate: bool
+
+
+class PayrollEstimateListResponse(PayrollSchema):
+    store_id: UUID
+    month: str
+    payday: int | None
+    members: list[PayrollEstimateSummary]
     is_estimate: bool

@@ -156,8 +156,58 @@ async def test_shift_times_include_only_my_published_shifts(session: Session) ->
     add_shift(session, other_store, date(2026, 11, 5), [me.id])
     session.commit()
 
-    shifts = await repository(session).list_published_shift_times(
-        store.id, me.id, date(2026, 10, 26), date(2026, 11, 30)
+    repo = repository(session)
+    mine = await repo.list_published_shift_times(
+        store.id, [me.id], date(2026, 10, 26), date(2026, 11, 30)
+    )
+    both = await repo.list_published_shift_times(
+        store.id, [me.id, other.id], date(2026, 10, 26), date(2026, 11, 30)
     )
 
-    assert shifts == [(date(2026, 11, 2), time(9), time(13))]
+    assert dict(mine) == {me.id: [(date(2026, 11, 2), time(9), time(13))]}
+    assert dict(both) == {
+        me.id: [(date(2026, 11, 2), time(9), time(13))],
+        other.id: [
+            (date(2026, 11, 2), time(9), time(13)),
+            (date(2026, 11, 3), time(9), time(13)),
+        ],
+    }
+    assert (
+        await repo.list_published_shift_times(
+            store.id, [], date(2026, 10, 26), date(2026, 11, 30)
+        )
+        == {}
+    )
+
+
+async def test_membership_lookup_by_id_is_scoped_to_store(session: Session) -> None:
+    store = add_store(session)
+    member = add_member(session, store)
+    left = add_member(session, store, left=True)
+    other_store = add_store(session)
+    session.commit()
+    repo = repository(session)
+
+    found = await repo.get_active_membership_by_id(store.id, member.id)
+
+    assert found is not None and found[0].id == member.id
+    assert await repo.get_active_membership_by_id(other_store.id, member.id) is None
+    assert await repo.get_active_membership_by_id(store.id, left.id) is None
+
+
+async def test_list_active_memberships_excludes_left(session: Session) -> None:
+    store = add_store(session)
+    first = add_member(session, store)
+    second = add_member(session, store)
+    add_member(session, store, left=True)
+    add_member(session, add_store(session))
+    deleted_store = add_store(session, deleted=True)
+    session.commit()
+    repo = repository(session)
+
+    found = await repo.list_active_memberships_with_store(store.id)
+
+    assert found is not None
+    assert found[0].id == store.id
+    assert {member.id for member in found[1]} == {first.id, second.id}
+    assert await repo.list_active_memberships_with_store(deleted_store.id) is None
