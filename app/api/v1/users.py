@@ -8,7 +8,12 @@ from app.db.session import get_db
 from app.models.user import User
 from app.repositories.membership import MembershipRepository
 from app.repositories.user import UserRepository
-from app.schemas.user import StoreSummary, UserResponse, UserUpdateRequest
+from app.schemas.user import (
+    MyStoreListResponse,
+    StoreSummary,
+    UserResponse,
+    UserUpdateRequest,
+)
 from app.services.membership import MembershipService
 from app.services.user import InactiveUserError, UserService
 
@@ -101,7 +106,7 @@ async def withdraw_my_account(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.get("/me/stores", response_model=list[StoreSummary])
+@router.get("/me/stores", response_model=MyStoreListResponse)
 async def get_my_stores(
     identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
     service: Annotated[UserService, Depends(get_user_service)],
@@ -109,7 +114,8 @@ async def get_my_stores(
         MembershipService,
         Depends(get_membership_service),
     ],
-) -> list[StoreSummary]:
+) -> MyStoreListResponse:
     """현재 사용자가 소속된 매장 목록을 조회합니다."""
     user = await _get_or_create_active_user(service, identity)
-    return await membership_service.list_store_summaries(user.id)
+    stores = await membership_service.list_store_details(user.id)
+    return MyStoreListResponse(stores=stores)

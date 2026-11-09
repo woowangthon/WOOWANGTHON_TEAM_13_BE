@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -8,6 +9,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.invitation import Invitation
 from app.models.membership import Membership
 from app.models.store import Store
+from app.models.user import User
+
+UserStoreRecord = tuple[
+    Store,
+    Literal["owner", "staff"],
+    str,
+    UUID | None,
+    str | None,
+    datetime,
+]
 
 
 class MembershipRepository:
@@ -17,18 +28,29 @@ class MembershipRepository:
     async def list_store_roles_for_user(
         self,
         user_id: UUID,
-    ) -> list[tuple[Store, str]]:
+    ) -> list[UserStoreRecord]:
         owner_query = (
-            select(Store)
+            select(Store, User.nickname)
+            .join(User, User.id == Store.owner_id)
             .where(Store.owner_id == user_id, Store.deleted_at.is_(None))
             .order_by(Store.created_at, Store.id)
         )
         owner_result = await self._session.execute(owner_query)
-        stores = [(store, "owner") for store in owner_result.scalars().all()]
+        stores: list[UserStoreRecord] = [
+            (store, "owner", owner_name, None, None, store.created_at)
+            for store, owner_name in owner_result.all()
+        ]
 
         staff_query = (
-            select(Store)
+            select(
+                Store,
+                User.nickname,
+                Membership.id,
+                Membership.staff_name,
+                Membership.joined_at,
+            )
             .join(Membership, Membership.store_id == Store.id)
+            .join(User, User.id == Store.owner_id)
             .where(
                 Membership.user_id == user_id,
                 Membership.left_at.is_(None),
@@ -37,7 +59,23 @@ class MembershipRepository:
             .order_by(Membership.joined_at, Membership.id)
         )
         staff_result = await self._session.execute(staff_query)
-        stores.extend((store, "staff") for store in staff_result.scalars().all())
+        stores.extend(
+            (
+                store,
+                "staff",
+                owner_name,
+                member_id,
+                staff_name,
+                joined_at,
+            )
+            for (
+                store,
+                owner_name,
+                member_id,
+                staff_name,
+                joined_at,
+            ) in staff_result.all()
+        )
         return stores
 
     async def get_active_by_store_and_user_id(

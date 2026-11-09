@@ -1,3 +1,5 @@
+from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -20,7 +22,28 @@ class UserSchema(BaseModel):
 class StoreSummary(UserSchema):
     store_id: UUID
     store_name: str
-    role: str
+    role: Literal["owner", "staff"]
+    owner_name: str
+    staff_name: str | None
+    photo_url: str | None
+
+
+class MyStoreDetail(UserSchema):
+    store_id: UUID
+    name: str
+    kind: str | None = None
+    address: str
+    owner_name: str
+    role: Literal["owner", "staff"]
+    member_id: UUID | None
+    staff_name: str | None
+    photo_url: str | None
+    theme: str | None = None
+    joined_at: datetime
+
+
+class MyStoreListResponse(UserSchema):
+    stores: list[MyStoreDetail] = Field(default_factory=list)
 
 
 class UserResponse(UserSchema):
