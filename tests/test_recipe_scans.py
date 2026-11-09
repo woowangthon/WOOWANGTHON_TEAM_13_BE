@@ -82,6 +82,7 @@ def test_scan_returns_camel_case_draft_with_nulls(
         "size": None,
         "ingredients": [{"name": "딸기청", "amount": None}],
         "steps": ["섞어요"],
+        "hasMoreRecipes": False,
     }
     assert service.received == ("image/jpeg", b"photo")
 
