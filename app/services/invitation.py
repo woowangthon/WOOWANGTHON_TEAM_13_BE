@@ -237,6 +237,7 @@ class InvitationService:
                 role="staff",
                 staff_name=staff_name,
                 hourly_wage=hourly_wage,
+                tax_type="none",
                 joined_at=now,
             )
         else:

@@ -18,20 +18,33 @@ class MembershipSchema(BaseModel):
     )
 
 
-MemberStatus = Literal["ACTIVE", "LEFT"]
+TaxType = Literal["none", "3.3", "ins"]
+MemberStatus = Literal["INVITED", "ACTIVE", "LEFT"]
 
 
 class MemberResponse(MembershipSchema):
-    member_id: UUID
+    member_id: UUID | None
     invitation_id: UUID | None
-    user_id: UUID
+    user_id: UUID | None
     staff_name: str
     role: str
     hourly_wage: int
+    tax_type: TaxType | None
     status: MemberStatus
-    joined_at: datetime
+    invited_at: datetime | None
+    joined_at: datetime | None
     left_at: datetime | None
 
 
 class MemberListResponse(MembershipSchema):
     members: list[MemberResponse]
+
+
+class HourlyWageUpdateRequest(MembershipSchema):
+    hourly_wage: int
+
+
+class HourlyWageUpdateResponse(MembershipSchema):
+    member_id: UUID
+    hourly_wage: int
+    updated_at: datetime

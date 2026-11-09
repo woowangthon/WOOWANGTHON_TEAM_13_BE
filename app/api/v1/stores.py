@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -11,6 +11,7 @@ from app.models.store import Store
 from app.models.user import User
 from app.repositories.store import StoreRepository
 from app.schemas.store import (
+    BusinessSize,
     StoreCreateRequest,
     StoreListResponse,
     StoreResponse,
@@ -52,6 +53,8 @@ def _to_response(store: Store, owner_name: str) -> StoreResponse:
         owner_name=owner_name,
         business_verification_id=store.business_verification_id,
         photo_url=store.photo_url,
+        payday=store.payday,
+        business_size=cast(BusinessSize | None, store.business_size),
     )
 
 

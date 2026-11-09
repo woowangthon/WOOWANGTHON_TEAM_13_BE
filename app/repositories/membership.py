@@ -141,6 +141,22 @@ class MembershipRepository:
         result = await self._session.execute(query)
         return [(row[0], row[1]) for row in result.all()]
 
+    async def list_available_invitations_by_store_id(
+        self,
+        store_id: UUID,
+    ) -> list[Invitation]:
+        query = (
+            select(Invitation)
+            .where(
+                Invitation.store_id == store_id,
+                Invitation.accepted_at.is_(None),
+                Invitation.revoked_at.is_(None),
+            )
+            .order_by(Invitation.created_at.desc(), Invitation.id.desc())
+        )
+        result = await self._session.execute(query)
+        return list(result.scalars().all())
+
     async def get_by_id_and_store_id(
         self,
         member_id: UUID,
@@ -165,6 +181,16 @@ class MembershipRepository:
         left_at: datetime,
     ) -> Membership:
         membership.left_at = left_at
+        self._session.add(membership)
+        try:
+            await self._session.commit()
+        except SQLAlchemyError:
+            await self._session.rollback()
+            raise
+        await self._session.refresh(membership)
+        return membership
+
+    async def update(self, membership: Membership) -> Membership:
         self._session.add(membership)
         try:
             await self._session.commit()

@@ -39,6 +39,8 @@ class StubStoreService:
             address="서울특별시 강남구 테헤란로 123",
             business_verification_id=101,
             photo_url="https://example.com/store.jpg",
+            payday=10,
+            business_size="UNDER_FIVE",
         )
         self.deleted = False
 
@@ -54,6 +56,8 @@ class StubStoreService:
             address=request.address,
             business_verification_id=request.business_verification_id,
             photo_url=request.photo_url,
+            payday=request.payday,
+            business_size=request.business_size,
         )
         return self.store
 
@@ -121,6 +125,8 @@ def test_create_store_uses_camel_case_contract() -> None:
             "address": "  서울특별시 마포구 1  ",
             "businessVerificationId": 202,
             "photoUrl": "https://example.com/new-store.jpg",
+            "payday": 25,
+            "businessSize": "FIVE_OR_MORE",
         },
     )
 
@@ -132,6 +138,8 @@ def test_create_store_uses_camel_case_contract() -> None:
         "ownerName": "홍길동",
         "businessVerificationId": 202,
         "photoUrl": "https://example.com/new-store.jpg",
+        "payday": 25,
+        "businessSize": "FIVE_OR_MORE",
     }
 
 
@@ -168,13 +176,42 @@ def test_update_store() -> None:
 
     response = client.patch(
         f"/api/v1/stores/{store_service.store.id}",
-        json={"name": "  수정한 매장  ", "photoUrl": None},
+        json={
+            "name": "  수정한 매장  ",
+            "photoUrl": None,
+            "payday": 31,
+            "businessSize": "UNDER_FIVE",
+        },
     )
 
     assert response.status_code == 200
     assert response.json()["name"] == "수정한 매장"
     assert response.json()["photoUrl"] is None
     assert response.json()["address"] == "서울특별시 강남구 테헤란로 123"
+    assert response.json()["payday"] == 31
+    assert response.json()["businessSize"] == "UNDER_FIVE"
+
+
+def test_store_rejects_invalid_payday() -> None:
+    client, _, store_service = create_client()
+
+    response = client.patch(
+        f"/api/v1/stores/{store_service.store.id}",
+        json={"payday": 30},
+    )
+
+    assert response.status_code == 422
+
+
+def test_store_rejects_invalid_business_size() -> None:
+    client, _, store_service = create_client()
+
+    response = client.patch(
+        f"/api/v1/stores/{store_service.store.id}",
+        json={"businessSize": "TEN_OR_MORE"},
+    )
+
+    assert response.status_code == 422
 
 
 def test_update_store_rejects_empty_body() -> None:

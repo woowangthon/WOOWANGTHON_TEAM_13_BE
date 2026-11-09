@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Response, status
@@ -24,7 +24,13 @@ from app.schemas.invitation import (
     InvitationVerificationResponse,
     MembershipResponse,
 )
-from app.schemas.membership import MemberListResponse, MemberResponse
+from app.schemas.membership import (
+    HourlyWageUpdateRequest,
+    HourlyWageUpdateResponse,
+    MemberListResponse,
+    MemberResponse,
+    TaxType,
+)
 from app.services.invitation import (
     InvitationAlreadyAvailableError,
     InvitationAlreadyJoinedError,
@@ -40,6 +46,8 @@ from app.services.membership import (
     MemberNotFoundError,
     MembershipService,
     MemberWithInvitation,
+    PendingMember,
+    WageBelowMinimumError,
 )
 from app.services.store import StoreNotFoundError, StoreService
 from app.services.user import InactiveUserError, UserService
@@ -146,7 +154,24 @@ def _invitation_summary(invitation: Invitation) -> InvitationSummaryResponse:
     )
 
 
-def _member_response(member: MemberWithInvitation) -> MemberResponse:
+def _member_response(
+    member: MemberWithInvitation | PendingMember,
+) -> MemberResponse:
+    if isinstance(member, PendingMember):
+        invitation = member.invitation
+        return MemberResponse(
+            member_id=None,
+            invitation_id=invitation.id,
+            user_id=None,
+            staff_name=invitation.staff_name,
+            role="staff",
+            hourly_wage=invitation.hourly_wage,
+            tax_type=None,
+            status="INVITED",
+            invited_at=invitation.created_at,
+            joined_at=None,
+            left_at=None,
+        )
     membership = member.membership
     return MemberResponse(
         member_id=membership.id,
@@ -155,7 +180,9 @@ def _member_response(member: MemberWithInvitation) -> MemberResponse:
         staff_name=membership.staff_name,
         role=membership.role,
         hourly_wage=membership.hourly_wage,
+        tax_type=cast(TaxType, membership.tax_type or "none"),
         status="LEFT" if membership.left_at is not None else "ACTIVE",
+        invited_at=None,
         joined_at=membership.joined_at,
         left_at=membership.left_at,
     )
@@ -447,6 +474,74 @@ async def get_member(
             },
         )
     return _member_response(membership)
+
+
+@router.put(
+    "/stores/{store_id}/members/{member_id}/hourly-wage",
+    response_model=HourlyWageUpdateResponse,
+)
+async def update_member_hourly_wage(
+    store_id: UUID,
+    member_id: UUID,
+    request: HourlyWageUpdateRequest,
+    identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+    store_service: Annotated[StoreService, Depends(get_store_service)],
+    membership_service: Annotated[
+        MembershipService,
+        Depends(get_membership_service),
+    ],
+) -> HourlyWageUpdateResponse | Response:
+    owner = await _active_user(user_service, identity)
+    try:
+        await store_service.get_for_owner(store_id, owner.id)
+    except StoreNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "STORE_NOT_FOUND",
+                "message": "매장을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    try:
+        membership = await membership_service.update_hourly_wage(
+            store_id,
+            member_id,
+            request.hourly_wage,
+        )
+    except MemberNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "MEMBER_NOT_FOUND",
+                "message": "구성원을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    except MemberAlreadyLeftError:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "code": "MEMBER_ALREADY_LEFT",
+                "message": "퇴사한 구성원의 시급은 변경할 수 없어요",
+                "detail": None,
+            },
+        )
+    except WageBelowMinimumError:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={
+                "code": "WAGE_BELOW_MINIMUM",
+                "message": "최저시급 10,320원보다 낮아요",
+                "detail": {"minimumHourlyWage": 10_320},
+            },
+        )
+    return HourlyWageUpdateResponse(
+        member_id=membership.id,
+        hourly_wage=membership.hourly_wage,
+        updated_at=membership.updated_at,
+    )
 
 
 @router.delete(

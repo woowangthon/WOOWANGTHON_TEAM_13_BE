@@ -52,6 +52,8 @@ def make_store(owner_id: UUID, **overrides: object) -> Store:
         "address": "서울특별시 강남구",
         "business_verification_id": None,
         "photo_url": None,
+        "payday": None,
+        "business_size": None,
     }
     values.update(overrides)
     return Store(**values)
@@ -65,12 +67,16 @@ async def test_create_store_assigns_authenticated_owner() -> None:
         name="우왕 카페",
         address="서울특별시 강남구",
         businessVerificationId=101,
+        payday=25,
+        businessSize="FIVE_OR_MORE",
     )
 
     store = await StoreService(repository).create(owner_id, request)
 
     assert store.owner_id == owner_id
     assert store.business_verification_id == 101
+    assert store.payday == 25
+    assert store.business_size == "FIVE_OR_MORE"
     assert repository.stores == [store]
 
 
@@ -110,12 +116,19 @@ async def test_update_store_changes_only_requested_fields() -> None:
     updated = await service.update(
         store.id,
         owner_id,
-        StoreUpdateRequest(name="수정한 매장", photoUrl=None),
+        StoreUpdateRequest(
+            name="수정한 매장",
+            photoUrl=None,
+            payday=31,
+            businessSize="UNDER_FIVE",
+        ),
     )
 
     assert updated.name == "수정한 매장"
     assert updated.address == "기존 주소"
     assert updated.photo_url is None
+    assert updated.payday == 31
+    assert updated.business_size == "UNDER_FIVE"
 
 
 @pytest.mark.asyncio
