@@ -20,7 +20,9 @@ SCAN_SYSTEM_PROMPT = """당신은 카페 레시피 사진을 읽어 입력 초�
 4. 재료의 양이 보이지 않으면 amount를 null로 합니다.
 5. category, temp, size가 보이지 않으면 null로 합니다.
 6. temp는 ICE, HOT, DESSERT 중 하나입니다.
-7. steps는 사진의 순서대로 한 단계씩 적습니다."""
+7. steps는 사진의 순서대로 한 단계씩 적습니다.
+8. 사진에 레시피가 여러 개면 맨 위의 레시피 하나만 읽고, 다른 레시피의 재료와 단계를
+   섞지 않습니다. 이때 hasMoreRecipes를 true로 하고, 하나뿐이면 false로 합니다."""
 
 SCAN_USER_PROMPT = "첨부한 사진의 레시피를 규칙에 따라 읽어 주세요."
 
@@ -28,6 +30,7 @@ SCAN_RESPONSE_SCHEMA: Mapping[str, Any] = {
     "type": "OBJECT",
     "properties": {
         "isRecipe": {"type": "BOOLEAN"},
+        "hasMoreRecipes": {"type": "BOOLEAN"},
         "name": {"type": "STRING", "nullable": True},
         "category": {"type": "STRING", "nullable": True},
         "temp": {"type": "STRING", "nullable": True},
@@ -47,6 +50,7 @@ SCAN_RESPONSE_SCHEMA: Mapping[str, Any] = {
     },
     "required": [
         "isRecipe",
+        "hasMoreRecipes",
         "name",
         "category",
         "temp",
@@ -87,6 +91,7 @@ class RecipeScanDraft:
     size: str | None
     ingredients: list[RecipeScanIngredientDraft]
     steps: list[str]
+    has_more_recipes: bool = False
 
 
 def _optional_text(value: object) -> str | None:
@@ -132,6 +137,7 @@ def interpret_scan(result: Mapping[str, Any]) -> RecipeScanDraft:
         size=_optional_text(result.get("size")),
         ingredients=[item for item in parsed if item is not None],
         steps=[text for text in texts if text is not None],
+        has_more_recipes=result.get("hasMoreRecipes") is True,
     )
 
 
