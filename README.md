@@ -365,12 +365,20 @@ AI가 매뉴얼에서 답을 찾지 못한 답변(`not_found`)만 사장님께 �
 
 예상 급여는 AI가 아니라 규칙 기반 코드로 계산합니다. 사장님이 확정한(`published`)
 스케줄에서 내게 배정된 근무 시간만 근거로 쓰며, 실제 출퇴근 기록이 아니므로 응답의
-`isEstimate`는 항상 `true`입니다. 재직 중인 알바생만 조회할 수 있고, 구성원이 아닌
-사장님은 `403`을 받습니다.
+`isEstimate`는 항상 `true`입니다.
 
 | Method | 경로 | 설명 |
 | --- | --- | --- |
-| `GET` | `/api/v1/stores/{storeId}/payroll/estimates/me?month=YYYY-MM` | 내 한 달 예상 급여 |
+| `GET` | `/api/v1/stores/{storeId}/payroll/estimates/me?month=YYYY-MM` | 내 한 달 예상 급여 (알바생) |
+| `GET` | `/api/v1/stores/{storeId}/payroll/estimates?month=YYYY-MM` | 직원별 예상 급여 목록 (사장님) |
+| `GET` | `/api/v1/stores/{storeId}/payroll/estimates/{estimateId}?month=YYYY-MM` | 예상 급여 상세 |
+
+- 예상 급여는 저장하지 않고 조회할 때 계산합니다. 그래서 `estimateId`는 구성원 ID(`memberId`)와 같습니다.
+- `estimates/me`는 재직 중인 알바생만 조회할 수 있고, 구성원이 아닌 사장님은 `403`을 받습니다.
+- 목록은 사장님만 조회할 수 있으며 재직 중인 직원 전체를 가입 순서로, 근무가 없는 직원도 0원으로 반환합니다.
+  목록 항목에는 `workDays`가 없고 상세에만 있습니다.
+- 상세는 사장님은 모든 재직 직원, 알바생은 본인만 조회할 수 있습니다. 다른 직원 것을 요청한 알바생은 `403`,
+  퇴사했거나 없는 구성원은 `404`입니다.
 
 - `month`를 생략하면 한국 시간 기준 이번 달입니다.
 - 기본급은 근무시간 × 시급입니다. 휴게시간은 스케줄에 없어 빼지 않습니다.

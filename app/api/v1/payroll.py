@@ -2,7 +2,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import time
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -15,19 +15,27 @@ from app.repositories.membership import MembershipRepository
 from app.repositories.payroll import PayrollRepository
 from app.repositories.store import StoreRepository
 from app.schemas.payroll import (
+    PayrollEstimateListResponse,
     PayrollEstimateResponse,
+    PayrollEstimateSummary,
     PayrollWeekResponse,
     PayrollWorkDayResponse,
 )
 from app.services.payroll_estimate import (
     PayrollEstimate,
+    PayrollEstimateNotFoundError,
     PayrollEstimateService,
     PayrollStaffOnlyError,
 )
 from app.services.store import StoreNotFoundError
-from app.services.store_access import StoreAccessService
+from app.services.store_access import StoreAccessForbiddenError, StoreAccessService
 
 router = APIRouter(prefix="/stores/{store_id}/payroll", tags=["payroll"])
+
+MonthQuery = Annotated[
+    str | None,
+    Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
+]
 
 
 def get_payroll_estimate_service(
@@ -51,15 +59,40 @@ def _clock(value: time) -> str:
     return value.strftime("%H:%M")
 
 
-def _to_response(estimate: PayrollEstimate) -> PayrollEstimateResponse:
-    """예상 급여 계산 결과를 응답 형식으로 변환합니다."""
+def _summary_fields(estimate: PayrollEstimate) -> dict[str, Any]:
+    """목록과 상세에 공통으로 들어가는 급여 필드를 만듭니다."""
     result = estimate.result
+    return {
+        "estimate_id": estimate.member_id,
+        "member_id": estimate.member_id,
+        "staff_name": estimate.staff_name,
+        "hourly_wage": estimate.hourly_wage,
+        "tax_type": estimate.tax_type,
+        "hours": _hours(result.hours),
+        "base_pay": result.base_pay,
+        "weekly_allowance": result.weekly_allowance,
+        "gross_pay": result.gross_pay,
+        "deduction": result.deduction,
+        "net_pay": result.net_pay,
+        "weeks": [
+            PayrollWeekResponse(
+                week_start=week.week_start,
+                hours=_hours(week.hours),
+                weekly_allowance_eligible=week.weekly_allowance_eligible,
+                weekly_allowance=week.weekly_allowance,
+            )
+            for week in result.weeks
+        ],
+    }
+
+
+def _to_response(estimate: PayrollEstimate) -> PayrollEstimateResponse:
+    """예상 급여 계산 결과를 상세 응답 형식으로 변환합니다."""
     return PayrollEstimateResponse(
+        **_summary_fields(estimate),
         store_id=estimate.store_id,
         month=estimate.month,
-        hourly_wage=estimate.hourly_wage,
         payday=estimate.payday,
-        tax_type=estimate.tax_type,
         weekly_allowance_enabled=estimate.weekly_allowance_enabled,
         work_days=[
             PayrollWorkDayResponse(
@@ -71,21 +104,6 @@ def _to_response(estimate: PayrollEstimate) -> PayrollEstimateResponse:
             )
             for day in estimate.work_days
         ],
-        hours=_hours(result.hours),
-        base_pay=result.base_pay,
-        weekly_allowance=result.weekly_allowance,
-        gross_pay=result.gross_pay,
-        deduction=result.deduction,
-        net_pay=result.net_pay,
-        weeks=[
-            PayrollWeekResponse(
-                week_start=week.week_start,
-                hours=_hours(week.hours),
-                weekly_allowance_eligible=week.weekly_allowance_eligible,
-                weekly_allowance=week.weekly_allowance,
-            )
-            for week in result.weeks
-        ],
         ai_note=None,
         is_estimate=True,
     )
@@ -96,10 +114,15 @@ def _translate_errors() -> Iterator[None]:
     """예상 급여 도메인 예외를 HTTP 오류로 변환합니다."""
     try:
         yield
-    except StoreNotFoundError:
+    except (StoreNotFoundError, PayrollEstimateNotFoundError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Store not found",
+            detail="Payroll estimate not found",
+        ) from None
+    except StoreAccessForbiddenError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Owner permission required",
         ) from None
     except PayrollStaffOnlyError:
         raise HTTPException(
@@ -116,12 +139,51 @@ async def get_my_payroll_estimate(
         PayrollEstimateService,
         Depends(get_payroll_estimate_service),
     ],
-    month: Annotated[
-        str | None,
-        Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$"),
-    ] = None,
+    month: MonthQuery = None,
 ) -> PayrollEstimateResponse:
     """확정 스케줄로 계산한 내 한 달 예상 급여를 조회합니다."""
     with _translate_errors():
         estimate = await service.estimate_mine(store_id, user.id, month)
+    return _to_response(estimate)
+
+
+@router.get("/estimates", response_model=PayrollEstimateListResponse)
+async def list_payroll_estimates(
+    store_id: UUID,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[
+        PayrollEstimateService,
+        Depends(get_payroll_estimate_service),
+    ],
+    month: MonthQuery = None,
+) -> PayrollEstimateListResponse:
+    """사장님이 재직 중인 직원별 한 달 예상 급여를 조회합니다."""
+    with _translate_errors():
+        estimates = await service.list_estimates(store_id, user.id, month)
+    return PayrollEstimateListResponse(
+        store_id=estimates.store_id,
+        month=estimates.month,
+        payday=estimates.payday,
+        members=[
+            PayrollEstimateSummary(**_summary_fields(estimate))
+            for estimate in estimates.estimates
+        ],
+        is_estimate=True,
+    )
+
+
+@router.get("/estimates/{estimate_id}", response_model=PayrollEstimateResponse)
+async def get_payroll_estimate(
+    store_id: UUID,
+    estimate_id: UUID,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[
+        PayrollEstimateService,
+        Depends(get_payroll_estimate_service),
+    ],
+    month: MonthQuery = None,
+) -> PayrollEstimateResponse:
+    """예상 급여 상세를 조회합니다. estimateId는 구성원 ID입니다."""
+    with _translate_errors():
+        estimate = await service.get_estimate(store_id, user.id, estimate_id, month)
     return _to_response(estimate)
