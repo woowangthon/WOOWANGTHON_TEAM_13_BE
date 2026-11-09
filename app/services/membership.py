@@ -1,11 +1,20 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from app.models.membership import Membership
 from app.models.store import Store
-from app.schemas.user import StoreSummary
+from app.schemas.user import MyStoreDetail, StoreSummary
+
+UserStoreRecord = tuple[
+    Store,
+    Literal["owner", "staff"],
+    str,
+    UUID | None,
+    str | None,
+    datetime,
+]
 
 
 class MemberNotFoundError(Exception):
@@ -26,7 +35,7 @@ class MembershipRepositoryProtocol(Protocol):
     async def list_store_roles_for_user(
         self,
         user_id: UUID,
-    ) -> list[tuple[Store, str]]: ...
+    ) -> list[UserStoreRecord]: ...
 
     async def list_by_store_id(
         self,
@@ -57,8 +66,35 @@ class MembershipService:
                 store_id=store.id,
                 store_name=store.name,
                 role=role,
+                owner_name=owner_name,
+                staff_name=staff_name,
+                photo_url=store.photo_url,
             )
-            for store, role in stores
+            for store, role, owner_name, _, staff_name, _ in stores
+        ]
+
+    async def list_store_details(self, user_id: UUID) -> list[MyStoreDetail]:
+        stores = await self._repository.list_store_roles_for_user(user_id)
+        return [
+            MyStoreDetail(
+                store_id=store.id,
+                name=store.name,
+                address=store.address,
+                owner_name=owner_name,
+                role=role,
+                member_id=member_id,
+                staff_name=staff_name,
+                photo_url=store.photo_url,
+                joined_at=joined_at,
+            )
+            for (
+                store,
+                role,
+                owner_name,
+                member_id,
+                staff_name,
+                joined_at,
+            ) in stores
         ]
 
     async def list_members(self, store_id: UUID) -> list[MemberWithInvitation]:
