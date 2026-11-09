@@ -7,6 +7,8 @@ import pytest
 from app.integrations.llm import LLMError, LLMImage
 from app.services.recipe_scan import (
     MAX_IMAGE_BYTES,
+    SCAN_RESPONSE_SCHEMA,
+    SCAN_SYSTEM_PROMPT,
     RecipeImageSizeError,
     RecipeImageTypeError,
     RecipeImageUnreadableError,
@@ -140,3 +142,22 @@ def test_cleans_unexpected_values() -> None:
     assert draft.size is None
     assert draft.ingredients == [RecipeScanIngredientDraft("얼음", None)]
     assert draft.steps == ["섞어요"]
+
+
+def test_single_recipe_has_no_more_recipes() -> None:
+    assert interpret_scan(VALID_RESULT).has_more_recipes is False
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [(True, True), (False, False), ("true", False)]
+)
+def test_has_more_recipes_flag(value: object, expected: bool) -> None:
+    draft = interpret_scan({**VALID_RESULT, "hasMoreRecipes": value})
+
+    assert draft.has_more_recipes is expected
+    assert draft.name == "딸기라떼"
+
+
+def test_prompt_forbids_mixing_recipes() -> None:
+    assert "섞지 않습니다" in SCAN_SYSTEM_PROMPT
+    assert "hasMoreRecipes" in SCAN_RESPONSE_SCHEMA["required"]

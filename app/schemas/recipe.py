@@ -65,6 +65,7 @@ class RecipeScanResponse(RecipeSchema):
     size: str | None
     ingredients: list[RecipeScanIngredient]
     steps: list[str]
+    has_more_recipes: bool
 
 
 class RecipeCreateRequest(RecipeSchema):
