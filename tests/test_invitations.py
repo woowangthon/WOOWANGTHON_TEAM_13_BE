@@ -22,7 +22,11 @@ from app.services.invitation import (
     InvitationLockedError,
     VerifiedInvitation,
 )
-from app.services.membership import MemberWithInvitation
+from app.services.membership import (
+    MemberWithInvitation,
+    PendingMember,
+    WageBelowMinimumError,
+)
 from app.services.store import StoreNotFoundError
 
 
@@ -99,6 +103,7 @@ class StubInvitationService:
                 role="staff",
                 staff_name=self.invitation.staff_name,
                 hourly_wage=self.invitation.hourly_wage,
+                tax_type="none",
                 joined_at=datetime.now(UTC),
             ),
             self.store,
@@ -118,14 +123,27 @@ class StubMembershipService:
             role="staff",
             staff_name="지은",
             hourly_wage=10_320,
+            tax_type="none",
             joined_at=datetime.now(UTC),
+        )
+        self.pending_invitation = Invitation(
+            id=uuid4(),
+            store_id=store.id,
+            created_by_user_id=uuid4(),
+            code="M8R4TW",
+            staff_name="도윤",
+            hourly_wage=11_000,
+            created_at=datetime.now(UTC) + timedelta(seconds=1),
         )
 
     async def list_members(
         self,
         store_id: UUID,
-    ) -> list[MemberWithInvitation]:
-        return [MemberWithInvitation(self.membership, self.invitation_id)]
+    ) -> list[MemberWithInvitation | PendingMember]:
+        return [
+            PendingMember(self.pending_invitation),
+            MemberWithInvitation(self.membership, self.invitation_id),
+        ]
 
     async def get_member(
         self,
@@ -136,6 +154,18 @@ class StubMembershipService:
 
     async def leave(self, store_id: UUID, member_id: UUID) -> Membership:
         self.membership.left_at = datetime.now(UTC)
+        return self.membership
+
+    async def update_hourly_wage(
+        self,
+        store_id: UUID,
+        member_id: UUID,
+        hourly_wage: int,
+    ) -> Membership:
+        if hourly_wage < 10_320:
+            raise WageBelowMinimumError
+        self.membership.hourly_wage = hourly_wage
+        self.membership.updated_at = datetime.now(UTC)
         return self.membership
 
 
@@ -194,6 +224,9 @@ def test_invitation_routes_are_registered() -> None:
     assert "/api/v1/memberships/join" in paths
     assert "/api/v1/stores/{store_id}/members" in paths
     assert "/api/v1/stores/{store_id}/members/{member_id}" in paths
+    assert (
+        "/api/v1/stores/{store_id}/members/{member_id}/hourly-wage" in paths
+    )
     assert (
         "/api/v1/stores/{store_id}/invitations/{invitation_id}/share-info"
         in paths
@@ -368,11 +401,17 @@ def test_owner_lists_members() -> None:
     response = client.get(f"/api/v1/stores/{service.store.id}/members")
 
     assert response.status_code == 200
-    assert response.json()["members"][0]["invitationId"] == str(
-        service.invitation.id
+    members = response.json()["members"]
+    assert members[0]["memberId"] is None
+    assert members[0]["invitationId"] == str(
+        service.membership_service.pending_invitation.id
     )
-    assert response.json()["members"][0]["staffName"] == "지은"
-    assert response.json()["members"][0]["status"] == "ACTIVE"
+    assert members[0]["staffName"] == "도윤"
+    assert members[0]["status"] == "INVITED"
+    assert members[0]["joinedAt"] is None
+    assert members[1]["invitationId"] == str(service.invitation.id)
+    assert members[1]["status"] == "ACTIVE"
+    assert members[1]["taxType"] == "none"
 
 
 def test_owner_gets_member_detail() -> None:
@@ -399,3 +438,35 @@ def test_owner_soft_deletes_member() -> None:
 
     assert response.status_code == 204
     assert membership.left_at is not None
+
+
+def test_owner_updates_member_hourly_wage() -> None:
+    client, service = create_client()
+    membership = service.membership_service.membership
+
+    response = client.put(
+        f"/api/v1/stores/{service.store.id}/members/{membership.id}/hourly-wage",
+        json={"hourlyWage": 12_000},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["memberId"] == str(membership.id)
+    assert response.json()["hourlyWage"] == 12_000
+    assert response.json()["updatedAt"] is not None
+
+
+def test_owner_cannot_set_wage_below_2026_minimum() -> None:
+    client, service = create_client()
+    membership = service.membership_service.membership
+
+    response = client.put(
+        f"/api/v1/stores/{service.store.id}/members/{membership.id}/hourly-wage",
+        json={"hourlyWage": 10_319},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "code": "WAGE_BELOW_MINIMUM",
+        "message": "최저시급 10,320원보다 낮아요",
+        "detail": {"minimumHourlyWage": 10_320},
+    }

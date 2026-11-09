@@ -2,6 +2,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
@@ -24,6 +25,10 @@ class Membership(Base):
             "store_id",
             "user_id",
             name="uq_memberships_store_user",
+        ),
+        CheckConstraint(
+            "tax_type IN ('none', '3.3', 'ins')",
+            name="ck_memberships_tax_type",
         ),
     )
 
@@ -48,6 +53,12 @@ class Membership(Base):
     )
     staff_name: Mapped[str] = mapped_column(String(50), nullable=False)
     hourly_wage: Mapped[int] = mapped_column(Integer, nullable=False)
+    tax_type: Mapped[str] = mapped_column(
+        String(16),
+        default="none",
+        server_default="none",
+        nullable=False,
+    )
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -56,4 +67,10 @@ class Membership(Base):
     left_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )

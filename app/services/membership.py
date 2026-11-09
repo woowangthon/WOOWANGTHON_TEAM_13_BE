@@ -3,8 +3,10 @@ from datetime import UTC, datetime
 from typing import Literal, Protocol
 from uuid import UUID
 
+from app.models.invitation import Invitation
 from app.models.membership import Membership
 from app.models.store import Store
+from app.schemas.invitation import MINIMUM_HOURLY_WAGE_2026
 from app.schemas.user import MyStoreDetail, StoreSummary
 
 UserStoreRecord = tuple[
@@ -25,10 +27,22 @@ class MemberAlreadyLeftError(Exception):
     pass
 
 
+class WageBelowMinimumError(Exception):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class MemberWithInvitation:
     membership: Membership
     invitation_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class PendingMember:
+    invitation: Invitation
+
+
+MemberListEntry = MemberWithInvitation | PendingMember
 
 
 class MembershipRepositoryProtocol(Protocol):
@@ -42,6 +56,11 @@ class MembershipRepositoryProtocol(Protocol):
         store_id: UUID,
     ) -> list[tuple[Membership, UUID | None]]: ...
 
+    async def list_available_invitations_by_store_id(
+        self,
+        store_id: UUID,
+    ) -> list[Invitation]: ...
+
     async def get_by_id_and_store_id(
         self,
         member_id: UUID,
@@ -53,6 +72,8 @@ class MembershipRepositoryProtocol(Protocol):
         membership: Membership,
         left_at: datetime,
     ) -> Membership: ...
+
+    async def update(self, membership: Membership) -> Membership: ...
 
 
 class MembershipService:
@@ -97,12 +118,27 @@ class MembershipService:
             ) in stores
         ]
 
-    async def list_members(self, store_id: UUID) -> list[MemberWithInvitation]:
+    async def list_members(self, store_id: UUID) -> list[MemberListEntry]:
         members = await self._repository.list_by_store_id(store_id)
-        return [
+        entries: list[MemberListEntry] = [
             MemberWithInvitation(membership, invitation_id)
             for membership, invitation_id in members
         ]
+        invitations = (
+            await self._repository.list_available_invitations_by_store_id(
+                store_id
+            )
+        )
+        entries.extend(PendingMember(invitation) for invitation in invitations)
+        return sorted(
+            entries,
+            key=lambda entry: (
+                entry.invitation.created_at
+                if isinstance(entry, PendingMember)
+                else entry.membership.joined_at
+            ),
+            reverse=True,
+        )
 
     async def get_member(
         self,
@@ -124,3 +160,19 @@ class MembershipService:
         if membership.left_at is not None:
             raise MemberAlreadyLeftError
         return await self._repository.leave(membership, datetime.now(UTC))
+
+    async def update_hourly_wage(
+        self,
+        store_id: UUID,
+        member_id: UUID,
+        hourly_wage: int,
+    ) -> Membership:
+        if hourly_wage < MINIMUM_HOURLY_WAGE_2026:
+            raise WageBelowMinimumError
+        member = await self.get_member(store_id, member_id)
+        membership = member.membership
+        if membership.left_at is not None:
+            raise MemberAlreadyLeftError
+        membership.hourly_wage = hourly_wage
+        membership.updated_at = datetime.now(UTC)
+        return await self._repository.update(membership)
