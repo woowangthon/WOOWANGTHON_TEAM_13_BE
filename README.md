@@ -360,3 +360,25 @@ AI가 매뉴얼에서 답을 찾지 못한 답변(`not_found`)만 사장님께 �
 | `PATCH` | `/api/v1/stores/{storeId}/handover-notes/{noteId}` | 수정 |
 | `DELETE` | `/api/v1/stores/{storeId}/handover-notes/{noteId}` | 삭제 |
 | `POST` | `/api/v1/stores/{storeId}/handover-notes/{noteId}/confirmations` | 항목 또는 노트 전체 체크 |
+
+## 예상 급여 API
+
+예상 급여는 AI가 아니라 규칙 기반 코드로 계산합니다. 사장님이 확정한(`published`)
+스케줄에서 내게 배정된 근무 시간만 근거로 쓰며, 실제 출퇴근 기록이 아니므로 응답의
+`isEstimate`는 항상 `true`입니다. 재직 중인 알바생만 조회할 수 있고, 구성원이 아닌
+사장님은 `403`을 받습니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/api/v1/stores/{storeId}/payroll/estimates/me?month=YYYY-MM` | 내 한 달 예상 급여 |
+
+- `month`를 생략하면 한국 시간 기준 이번 달입니다.
+- 기본급은 근무시간 × 시급입니다. 휴게시간은 스케줄에 없어 빼지 않습니다.
+- 주휴수당은 월요일부터 일요일까지 한 주의 근무가 15시간 이상이면
+  `min(주 근무시간, 40) ÷ 40 × 8 × 시급`이며 10원 단위로 반올림합니다. 월을 걸친 주는
+  일요일이 속한 달에 넣습니다. 공휴일·연장·야간 가산은 계산하지 않습니다.
+- 공제는 구성원의 `taxType`을 따릅니다. `none`은 0%, `3.3`은 3.3%, `ins`는 2026년
+  근로자 부담 4대보험 합계 9.7174%이며 10원 단위로 반올림합니다.
+- `workDays[].status`는 근무 종료 시각이 지났으면 `worked`, 아니면 `planned`입니다.
+- `payday`는 매장 급여일이며 31은 말일입니다. `aiNote`는 아직 `null`입니다.
+- 재가입하면 구성원의 시급이 새 값으로 바뀌므로 지난달 금액도 현재 시급으로 계산됩니다.
