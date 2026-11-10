@@ -79,6 +79,7 @@ def get_owner_question_service(
             StoreRepository(session),
             MembershipRepository(session),
         ),
+        ManualRepository(session),
     )
 
 

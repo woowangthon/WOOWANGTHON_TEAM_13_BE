@@ -22,6 +22,8 @@ class OwnerQuestionAnswerRequest(OwnerQuestionSchema):
     answer: str = Field(min_length=1, max_length=2000)
     add_to_manual: bool = False
     manual_title: str | None = Field(default=None, max_length=100)
+    manual_body: str | None = Field(default=None, max_length=5000)
+    manual_category_id: UUID | None = None
 
     @field_validator("answer")
     @classmethod
@@ -31,6 +33,14 @@ class OwnerQuestionAnswerRequest(OwnerQuestionSchema):
         if not stripped:
             raise ValueError("value must not be blank")
         return stripped
+
+    @field_validator("manual_title", "manual_body")
+    @classmethod
+    def blank_to_none(cls, value: str | None) -> str | None:
+        """매뉴얼 제목과 본문이 비어 있으면 기본값을 쓰도록 None으로 바꿉니다."""
+        if value is None:
+            return None
+        return value.strip() or None
 
 
 class OwnerQuestionItem(OwnerQuestionSchema):
@@ -48,3 +58,7 @@ class OwnerQuestionItem(OwnerQuestionSchema):
 
 class OwnerQuestionListResponse(OwnerQuestionSchema):
     questions: list[OwnerQuestionItem]
+
+
+class OwnerQuestionAnswerResponse(OwnerQuestionItem):
+    manual_id: UUID | None

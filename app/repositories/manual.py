@@ -40,6 +40,24 @@ class ManualRepository:
         result = await self._session.execute(query)
         return result.scalar_one_or_none()
 
+    async def get_category_by_name(
+        self,
+        store_id: UUID,
+        name: str,
+    ) -> ManualCategory | None:
+        """매장에서 이름이 같은 카테고리 중 가장 먼저 만든 것을 조회합니다."""
+        query = (
+            select(ManualCategory)
+            .where(
+                ManualCategory.store_id == store_id,
+                ManualCategory.name == name,
+            )
+            .order_by(ManualCategory.created_at, ManualCategory.id)
+            .limit(1)
+        )
+        result = await self._session.execute(query)
+        return result.scalar_one_or_none()
+
     async def create(self, manual: Manual) -> Manual:
         """새 매뉴얼을 저장합니다."""
         await self._commit(manual)

@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.assistant_chat import AssistantChat, AssistantMessage
+from app.models.manual import Manual, ManualCategory
 from app.models.membership import Membership
 from app.models.owner_question import (
     OWNER_QUESTION_ANSWERED,
@@ -113,8 +114,10 @@ class OwnerQuestionRepository:
         answered_at: datetime,
         owner_message: AssistantMessage,
         chat: AssistantChat,
+        manual: Manual | None = None,
+        category: ManualCategory | None = None,
     ) -> bool:
-        """답하지 않은 질문에만 답변을 저장하고 이미 답했으면 False를 반환합니다."""
+        """미답변 질문에만 답변과 매뉴얼을 함께 저장하고, 이미 답했으면 False입니다."""
         query = (
             update(OwnerQuestion)
             .where(
@@ -134,6 +137,11 @@ class OwnerQuestionRepository:
             if cast(CursorResult[Any], result).rowcount != 1:
                 await self._session.rollback()
                 return False
+            if category is not None:
+                self._session.add(category)
+                await self._session.flush()
+            if manual is not None:
+                self._session.add(manual)
             self._session.add_all([owner_message, chat])
             await self._session.commit()
         except SQLAlchemyError:

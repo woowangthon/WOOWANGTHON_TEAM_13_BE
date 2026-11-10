@@ -338,8 +338,20 @@ AI 사수는 현재 매장의 매뉴얼과 레시피만 근거로 답합니다. 
 AI가 매뉴얼에서 답을 찾지 못한 답변(`not_found`)만 사장님께 넘길 수 있습니다. 넘긴
 답변은 메시지 응답의 `ownerQuestion`에 상태가 표시되고, 사장님이 답하면 알바생
 채팅에 `sender: "owner"` 메시지로 들어갑니다. 질문 목록과 답변은 사장님만 할 수
-있습니다. 답변을 매뉴얼에 추가하는 기능(`addToManual: true`)은 아직 지원하지 않아
-`501`을 반환합니다.
+있습니다.
+
+답변할 때 `addToManual: true`를 보내면 답변 저장과 매뉴얼 생성을 한 트랜잭션으로
+처리합니다. 하나라도 실패하면 둘 다 저장되지 않습니다. 만들어진 매뉴얼은 다음 질문부터
+AI 사수의 근거 문서가 되고, 일반 매뉴얼 API로 수정·삭제할 수 있습니다.
+
+| 요청 필드 | 설명 | 비우면 |
+| --- | --- | --- |
+| `manualTitle` | 매뉴얼 제목 (최대 100자) | 질문 앞 30자 |
+| `manualBody` | 매뉴얼 본문 (최대 5000자) | `질문: …` / `답변: …` 형식 |
+| `manualCategoryId` | 같은 매장의 카테고리 | `물건 위치` 카테고리 (없으면 새로 만듦) |
+
+`addToManual`이 `false`이면 위 필드는 무시합니다. 답변 응답의 `manualId`는 만들어진
+매뉴얼 ID이고, 매뉴얼을 만들지 않았으면 `null`입니다.
 
 | Method | 경로 | 설명 |
 | --- | --- | --- |
@@ -352,7 +364,7 @@ AI가 매뉴얼에서 답을 찾지 못한 답변(`not_found`)만 사장님께 �
 | 이미 넘긴 답변 | `409 OWNER_QUESTION_ALREADY_SENT` |
 | `not_found`가 아닌 메시지 | `422 OWNER_QUESTION_NOT_ALLOWED` |
 | 이미 답한 질문 | `409 OWNER_QUESTION_ALREADY_ANSWERED` |
-| 매뉴얼 추가 요청 | `501 ADD_TO_MANUAL_NOT_SUPPORTED` |
+| 다른 매장이거나 없는 `manualCategoryId` | `422` |
 
 ## 인수인계 API
 

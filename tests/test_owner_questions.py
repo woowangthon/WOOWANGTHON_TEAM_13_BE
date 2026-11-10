@@ -11,8 +11,9 @@ from app.app import app
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.models.owner_question import OwnerQuestion
 from app.models.user import User
+from app.services.manual import ManualCategoryNotFoundError
 from app.services.owner_question import (
-    AddToManualNotSupportedError,
+    ManualDraft,
     OwnerQuestionAlreadyAnsweredError,
     OwnerQuestionNotFoundError,
     OwnerQuestionView,
@@ -54,7 +55,8 @@ class StubOwnerQuestionService:
         self.error: Exception | None = None
         self.question = make_question()
         self.seen_status: str | None = "unset"
-        self.seen_answer: tuple[str, bool] | None = None
+        self.seen_answer: tuple[str, ManualDraft | None] | None = None
+        self.manual_id: UUID | None = None
 
     async def list_questions(
         self,
@@ -73,15 +75,17 @@ class StubOwnerQuestionService:
         question_id: UUID,
         user_id: UUID,
         text: str,
-        add_to_manual: bool,
+        manual_draft: ManualDraft | None = None,
     ) -> OwnerQuestionView:
         if self.error is not None:
             raise self.error
-        self.seen_answer = (text, add_to_manual)
+        self.seen_answer = (text, manual_draft)
         self.question.status = "answered"
         self.question.answer = text
         self.question.answered_at = datetime.now(UTC)
-        return OwnerQuestionView(self.question, "지은")
+        if manual_draft is not None:
+            self.manual_id = uuid4()
+        return OwnerQuestionView(self.question, "지은", self.manual_id)
 
 
 def make_client() -> tuple[TestClient, StubOwnerQuestionService]:
@@ -170,7 +174,64 @@ def test_answer_question() -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "answered"
     assert response.json()["answer"] == "카운터 아래 우산 빌려주세요"
-    assert service.seen_answer == ("카운터 아래 우산 빌려주세요", False)
+    assert response.json()["manualId"] is None
+    assert service.seen_answer == ("카운터 아래 우산 빌려주세요", None)
+
+
+def test_answer_and_add_to_manual() -> None:
+    client, service = make_client()
+    category_id = uuid4()
+
+    response = client.post(
+        questions_url(f"/{service.question.id}/answer"),
+        json={
+            "answer": "창고 왼쪽 선반",
+            "addToManual": True,
+            "manualTitle": " 청소도구 위치 ",
+            "manualBody": "창고 왼쪽 선반에 빗자루, 쓰레받기",
+            "manualCategoryId": str(category_id),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["manualId"] == str(service.manual_id)
+    assert service.seen_answer == (
+        "창고 왼쪽 선반",
+        ManualDraft(
+            title="청소도구 위치",
+            body="창고 왼쪽 선반에 빗자루, 쓰레받기",
+            category_id=category_id,
+        ),
+    )
+
+
+def test_add_to_manual_blank_edits_use_defaults() -> None:
+    client, service = make_client()
+
+    response = client.post(
+        questions_url(f"/{service.question.id}/answer"),
+        json={
+            "answer": "답",
+            "addToManual": True,
+            "manualTitle": "  ",
+            "manualBody": "",
+        },
+    )
+
+    assert response.status_code == 200
+    assert service.seen_answer == ("답", ManualDraft())
+
+
+def test_manual_fields_ignored_without_add_to_manual() -> None:
+    client, service = make_client()
+
+    response = client.post(
+        questions_url(f"/{service.question.id}/answer"),
+        json={"answer": "답", "manualTitle": "제목"},
+    )
+
+    assert response.status_code == 200
+    assert service.seen_answer == ("답", None)
 
 
 def test_answer_rejects_blank_text() -> None:
@@ -189,8 +250,8 @@ def test_answer_error_codes() -> None:
     url = questions_url(f"/{service.question.id}/answer")
     body = {"answer": "답변", "addToManual": True, "manualTitle": "우산 대여"}
 
-    service.error = AddToManualNotSupportedError()
-    not_supported = client.post(url, json=body)
+    service.error = ManualCategoryNotFoundError()
+    bad_category = client.post(url, json=body)
     service.error = OwnerQuestionAlreadyAnsweredError()
     answered = client.post(url, json=body)
     service.error = OwnerQuestionNotFoundError()
@@ -198,8 +259,7 @@ def test_answer_error_codes() -> None:
     service.error = StoreAccessForbiddenError()
     forbidden = client.post(url, json=body)
 
-    assert not_supported.status_code == 501
-    assert not_supported.json()["code"] == "ADD_TO_MANUAL_NOT_SUPPORTED"
+    assert bad_category.status_code == 422
     assert answered.status_code == 409
     assert answered.json()["code"] == "OWNER_QUESTION_ALREADY_ANSWERED"
     assert missing.status_code == 404

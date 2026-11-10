@@ -4,14 +4,17 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.models.assistant_chat import AssistantChat, AssistantMessage
+from app.models.manual import Manual, ManualCategory
 from app.models.owner_question import OwnerQuestion
 from app.services.assistant_chat import (
     AssistantChatNotFoundError,
     AssistantMessageNotFoundError,
 )
+from app.services.manual import ManualCategoryNotFoundError
 from app.services.owner_question import (
     ASKED_SYSTEM_TEXT,
-    AddToManualNotSupportedError,
+    DEFAULT_MANUAL_CATEGORY,
+    ManualDraft,
     OwnerQuestionAlreadyAnsweredError,
     OwnerQuestionAlreadySentError,
     OwnerQuestionNotAllowedError,
@@ -84,11 +87,38 @@ class FakeChats:
         return max(earlier, key=lambda item: item.created_at, default=None)
 
 
+class FakeCategories:
+    def __init__(self) -> None:
+        self.categories: list[ManualCategory] = []
+
+    async def get_category(
+        self,
+        category_id: UUID,
+        store_id: UUID,
+    ) -> ManualCategory | None:
+        for category in self.categories:
+            if category.id == category_id and category.store_id == store_id:
+                return category
+        return None
+
+    async def get_category_by_name(
+        self,
+        store_id: UUID,
+        name: str,
+    ) -> ManualCategory | None:
+        for category in self.categories:
+            if category.store_id == store_id and category.name == name:
+                return category
+        return None
+
+
 class FakeOwnerQuestions:
     def __init__(self, chats: FakeChats) -> None:
         self.chats = chats
         self.questions: list[OwnerQuestion] = []
         self.saved_messages: list[AssistantMessage] = []
+        self.saved_manuals: list[Manual] = []
+        self.saved_categories: list[ManualCategory] = []
         self.race_on_ask = False
         self.race_on_answer = False
 
@@ -142,9 +172,15 @@ class FakeOwnerQuestions:
         answered_at: datetime,
         owner_message: AssistantMessage,
         chat: AssistantChat,
+        manual: Manual | None = None,
+        category: ManualCategory | None = None,
     ) -> bool:
         if self.race_on_answer:
             return False
+        if category is not None:
+            self.saved_categories.append(category)
+        if manual is not None:
+            self.saved_manuals.append(manual)
         question.status = "answered"
         question.answer = owner_message.text
         question.answered_by = answered_by
@@ -157,10 +193,12 @@ class Harness:
     def __init__(self) -> None:
         self.chats = FakeChats()
         self.repository = FakeOwnerQuestions(self.chats)
+        self.categories = FakeCategories()
         self.service = OwnerQuestionService(
             self.chats,
             self.repository,
             FakeStoreAccess(),
+            self.categories,
         )
         self.chat = AssistantChat(
             id=uuid4(),
@@ -322,7 +360,6 @@ async def test_owner_answer_is_delivered_to_staff_chat(harness: Harness) -> None
         question.id,
         OWNER_ID,
         "카운터 아래 우산 빌려주세요",
-        False,
     )
 
     assert view.question.status == "answered"
@@ -337,10 +374,10 @@ async def test_owner_answer_is_delivered_to_staff_chat(harness: Harness) -> None
 
 async def test_answered_question_cannot_be_answered_again(harness: Harness) -> None:
     question = await harness.ask(harness.not_found_exchange())
-    await harness.service.answer(STORE_ID, question.id, OWNER_ID, "답변", False)
+    await harness.service.answer(STORE_ID, question.id, OWNER_ID, "답변")
 
     with pytest.raises(OwnerQuestionAlreadyAnsweredError):
-        await harness.service.answer(STORE_ID, question.id, OWNER_ID, "또", False)
+        await harness.service.answer(STORE_ID, question.id, OWNER_ID, "또")
 
 
 async def test_concurrent_answer_is_conflict(harness: Harness) -> None:
@@ -348,27 +385,119 @@ async def test_concurrent_answer_is_conflict(harness: Harness) -> None:
     harness.repository.race_on_answer = True
 
     with pytest.raises(OwnerQuestionAlreadyAnsweredError):
-        await harness.service.answer(STORE_ID, question.id, OWNER_ID, "답변", False)
+        await harness.service.answer(STORE_ID, question.id, OWNER_ID, "답변")
 
 
-async def test_add_to_manual_is_not_supported(harness: Harness) -> None:
+async def test_answer_without_manual_saves_no_manual(harness: Harness) -> None:
     question = await harness.ask(harness.not_found_exchange())
 
-    with pytest.raises(AddToManualNotSupportedError):
-        await harness.service.answer(STORE_ID, question.id, OWNER_ID, "답변", True)
+    view = await harness.service.answer(STORE_ID, question.id, OWNER_ID, "답변")
+
+    assert view.manual_id is None
+    assert harness.repository.saved_manuals == []
+
+
+async def test_add_to_manual_uses_question_and_default_category(
+    harness: Harness,
+) -> None:
+    question = await harness.ask(harness.not_found_exchange("쓰레받기 어딨어?"))
+
+    view = await harness.service.answer(
+        STORE_ID,
+        question.id,
+        OWNER_ID,
+        "창고 왼쪽 선반에 빗자루, 쓰레받기가 있어요",
+        ManualDraft(),
+    )
+
+    [manual] = harness.repository.saved_manuals
+    [category] = harness.repository.saved_categories
+    assert view.manual_id == manual.id
+    assert manual.store_id == STORE_ID
+    assert manual.title == "쓰레받기 어딨어?"
+    assert manual.body == (
+        "질문: 쓰레받기 어딨어?\n답변: 창고 왼쪽 선반에 빗자루, 쓰레받기가 있어요"
+    )
+    assert manual.icon is None
+    assert category.name == DEFAULT_MANUAL_CATEGORY
+    assert category.store_id == STORE_ID
+    assert manual.category_id == category.id
+    assert question.status == "answered"
+
+
+async def test_add_to_manual_reuses_existing_default_category(
+    harness: Harness,
+) -> None:
+    existing = ManualCategory(id=uuid4(), store_id=STORE_ID, name="물건 위치")
+    harness.categories.categories.append(existing)
+    question = await harness.ask(harness.not_found_exchange())
+
+    await harness.service.answer(STORE_ID, question.id, OWNER_ID, "답", ManualDraft())
+
+    [manual] = harness.repository.saved_manuals
+    assert manual.category_id == existing.id
+    assert harness.repository.saved_categories == []
+
+
+async def test_add_to_manual_uses_owner_edits(harness: Harness) -> None:
+    chosen = ManualCategory(id=uuid4(), store_id=STORE_ID, name="오픈")
+    harness.categories.categories.append(chosen)
+    question = await harness.ask(harness.not_found_exchange())
+    draft = ManualDraft(
+        title="우산 대여",
+        body="카운터 아래 우산",
+        category_id=chosen.id,
+    )
+
+    await harness.service.answer(STORE_ID, question.id, OWNER_ID, "네", draft)
+
+    [manual] = harness.repository.saved_manuals
+    assert (manual.title, manual.body, manual.category_id) == (
+        "우산 대여",
+        "카운터 아래 우산",
+        chosen.id,
+    )
+    assert harness.repository.saved_categories == []
+
+
+async def test_add_to_manual_rejects_other_store_category(harness: Harness) -> None:
+    other = ManualCategory(id=uuid4(), store_id=uuid4(), name="물건 위치")
+    harness.categories.categories.append(other)
+    question = await harness.ask(harness.not_found_exchange())
+
+    with pytest.raises(ManualCategoryNotFoundError):
+        await harness.service.answer(
+            STORE_ID,
+            question.id,
+            OWNER_ID,
+            "답",
+            ManualDraft(category_id=other.id),
+        )
     assert question.status == "asked"
+    assert harness.repository.saved_manuals == []
+
+
+async def test_concurrent_answer_with_manual_saves_nothing(harness: Harness) -> None:
+    question = await harness.ask(harness.not_found_exchange())
+    harness.repository.race_on_answer = True
+
+    with pytest.raises(OwnerQuestionAlreadyAnsweredError):
+        await harness.service.answer(
+            STORE_ID, question.id, OWNER_ID, "답", ManualDraft()
+        )
+    assert harness.repository.saved_manuals == []
 
 
 async def test_staff_cannot_answer(harness: Harness) -> None:
     question = await harness.ask(harness.not_found_exchange())
 
     with pytest.raises(StoreAccessForbiddenError):
-        await harness.service.answer(STORE_ID, question.id, STAFF_ID, "답변", False)
+        await harness.service.answer(STORE_ID, question.id, STAFF_ID, "답변")
 
 
 async def test_unknown_question_is_not_found(harness: Harness) -> None:
     with pytest.raises(OwnerQuestionNotFoundError):
-        await harness.service.answer(STORE_ID, uuid4(), OWNER_ID, "답변", False)
+        await harness.service.answer(STORE_ID, uuid4(), OWNER_ID, "답변")
 
 
 def test_question_title_uses_leading_text() -> None:

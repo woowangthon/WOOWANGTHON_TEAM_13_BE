@@ -11,11 +11,13 @@ from app.api.v1.assistant_chats import get_owner_question_service
 from app.models.user import User
 from app.schemas.owner_question import (
     OwnerQuestionAnswerRequest,
+    OwnerQuestionAnswerResponse,
     OwnerQuestionItem,
     OwnerQuestionListResponse,
 )
+from app.services.manual import ManualCategoryNotFoundError
 from app.services.owner_question import (
-    AddToManualNotSupportedError,
+    ManualDraft,
     OwnerQuestionAlreadyAnsweredError,
     OwnerQuestionNotFoundError,
     OwnerQuestionService,
@@ -68,6 +70,11 @@ def _translate_errors() -> Iterator[None]:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Owner question not found",
         ) from None
+    except ManualCategoryNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Manual category not found",
+        ) from None
 
 
 def _error_response(status_code: int, code: str, message: str) -> JSONResponse:
@@ -96,12 +103,11 @@ async def list_owner_questions(
 
 @router.post(
     "/{question_id}/answer",
-    response_model=OwnerQuestionItem,
+    response_model=OwnerQuestionAnswerResponse,
     responses={
         status.HTTP_409_CONFLICT: {
             "description": "OWNER_QUESTION_ALREADY_ANSWERED",
         },
-        status.HTTP_501_NOT_IMPLEMENTED: {"description": "ADD_TO_MANUAL_NOT_SUPPORTED"},
     },
 )
 async def answer_owner_question(
@@ -110,8 +116,15 @@ async def answer_owner_question(
     request: OwnerQuestionAnswerRequest,
     user: Annotated[User, Depends(get_active_user)],
     service: Annotated[OwnerQuestionService, Depends(get_owner_question_service)],
-) -> OwnerQuestionItem | JSONResponse:
-    """사장님 답변을 저장하고 알바생 채팅에 전달합니다."""
+) -> OwnerQuestionAnswerResponse | JSONResponse:
+    """사장님 답변을 저장하고, 요청하면 매뉴얼로도 추가합니다."""
+    draft = None
+    if request.add_to_manual:
+        draft = ManualDraft(
+            title=request.manual_title,
+            body=request.manual_body,
+            category_id=request.manual_category_id,
+        )
     try:
         with _translate_errors():
             view = await service.answer(
@@ -119,7 +132,7 @@ async def answer_owner_question(
                 question_id,
                 user.id,
                 request.answer,
-                request.add_to_manual,
+                draft,
             )
     except OwnerQuestionAlreadyAnsweredError:
         return _error_response(
@@ -127,10 +140,8 @@ async def answer_owner_question(
             "OWNER_QUESTION_ALREADY_ANSWERED",
             "이미 답변한 질문이에요",
         )
-    except AddToManualNotSupportedError:
-        return _error_response(
-            status.HTTP_501_NOT_IMPLEMENTED,
-            "ADD_TO_MANUAL_NOT_SUPPORTED",
-            "매뉴얼에 추가하기는 아직 지원하지 않아요",
-        )
-    return _to_item(view)
+    item = _to_item(view)
+    return OwnerQuestionAnswerResponse(
+        **item.model_dump(),
+        manual_id=view.manual_id,
+    )
