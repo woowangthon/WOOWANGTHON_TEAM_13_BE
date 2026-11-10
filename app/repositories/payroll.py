@@ -1,11 +1,12 @@
 from collections import defaultdict
 from collections.abc import Sequence
-from datetime import date, time
+from datetime import date, time, timedelta
 from uuid import UUID
 
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.fixed_schedule import FixedShiftAssignment, ShiftAssignmentOverride
 from app.models.membership import Membership
 from app.models.schedule import Schedule, ScheduleAssignment, ScheduleShift
 from app.models.store import Store
@@ -88,10 +89,69 @@ class PayrollRepository:
         start_date: date,
         end_date: date,
     ) -> dict[UUID, list[tuple[date, time, time]]]:
-        """기간 안의 확정 스케줄에서 구성원별로 배정된 근무 시간을 조회합니다."""
+        """기간 안의 고정 스케줄과 날짜별 대타 반영 결과를 조회합니다."""
         shifts: dict[UUID, list[tuple[date, time, time]]] = defaultdict(list)
         if not membership_ids:
             return shifts
+        member_rows = (
+            await self._session.execute(
+                select(Membership.id, Membership.user_id).where(
+                    Membership.id.in_(membership_ids),
+                    Membership.store_id == store_id,
+                )
+            )
+        ).all()
+        member_by_user = {user_id: member_id for member_id, user_id in member_rows}
+        fixed_assignments = list(
+            (
+                await self._session.execute(
+                    select(FixedShiftAssignment).where(
+                        FixedShiftAssignment.store_id == store_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if fixed_assignments:
+            overrides = (
+                await self._session.execute(
+                    select(ShiftAssignmentOverride).where(
+                        ShiftAssignmentOverride.fixed_assignment_id.in_(
+                            [item.id for item in fixed_assignments]
+                        ),
+                        ShiftAssignmentOverride.work_date.between(start_date, end_date),
+                    )
+                )
+            ).scalars()
+            override_map = {
+                (item.fixed_assignment_id, item.work_date): item.assignee_user_id
+                for item in overrides
+            }
+            cursor = start_date
+            while cursor <= end_date:
+                for assignment in fixed_assignments:
+                    if assignment.weekday != cursor.weekday():
+                        continue
+                    user_id = override_map.get(
+                        (assignment.id, cursor), assignment.assignee_user_id
+                    )
+                    member_id = member_by_user.get(user_id)
+                    if member_id is None:
+                        continue
+                    shifts[member_id].append(
+                        (
+                            cursor,
+                            assignment.template.start_time,
+                            assignment.template.end_time,
+                        )
+                    )
+                cursor += timedelta(days=1)
+            for member_shifts in shifts.values():
+                member_shifts.sort(key=lambda item: (item[0], item[1], item[2]))
+            return shifts
+
+        # 고정 스케줄 도입 전 등록된 확정 스케줄을 위한 호환 경로입니다.
         query = (
             select(
                 ScheduleAssignment.membership_id,

@@ -9,6 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+from app.models.fixed_schedule import (
+    FixedShiftAssignment,
+    ShiftAssignmentOverride,
+    ShiftTemplate,
+    SubstituteRequest,
+)
 from app.models.membership import Membership
 from app.models.schedule import (
     Schedule,
@@ -42,6 +48,10 @@ def session() -> Iterator[Session]:
         Schedule.__table__,
         ScheduleShift.__table__,
         ScheduleAssignment.__table__,
+        ShiftTemplate.__table__,
+        FixedShiftAssignment.__table__,
+        SubstituteRequest.__table__,
+        ShiftAssignmentOverride.__table__,
     ]
     User.metadata.create_all(engine, tables=tables)
     with Session(engine, expire_on_commit=False) as db_session:
@@ -113,6 +123,35 @@ def add_shift(
     session.flush()
 
 
+def add_fixed_shift(
+    session: Session,
+    store: Store,
+    member: Membership,
+    *,
+    weekday: int,
+) -> FixedShiftAssignment:
+    template = ShiftTemplate(
+        id=uuid4(),
+        store_id=store.id,
+        name="오픈",
+        start_time=time(10),
+        end_time=time(14),
+        role="홀",
+        sort_order=0,
+    )
+    assignment = FixedShiftAssignment(
+        id=uuid4(),
+        store_id=store.id,
+        template_id=template.id,
+        weekday=weekday,
+        assignee_user_id=member.user_id,
+        template=template,
+    )
+    session.add_all([template, assignment])
+    session.flush()
+    return assignment
+
+
 async def test_membership_lookup_returns_store(session: Session) -> None:
     store = add_store(session)
     member = add_member(session, store)
@@ -178,6 +217,46 @@ async def test_shift_times_include_only_my_published_shifts(session: Session) ->
         )
         == {}
     )
+
+
+async def test_fixed_shift_and_substitute_override_drive_payroll(
+    session: Session,
+) -> None:
+    store = add_store(session)
+    original = add_member(session, store)
+    substitute = add_member(session, store)
+    assignment = add_fixed_shift(session, store, original, weekday=0)
+    request = SubstituteRequest(
+        id=uuid4(),
+        store_id=store.id,
+        fixed_assignment_id=assignment.id,
+        work_date=date(2026, 11, 9),
+        requester_user_id=original.user_id,
+        target_user_id=substitute.user_id,
+        status="ACCEPTED",
+    )
+    override = ShiftAssignmentOverride(
+        id=uuid4(),
+        fixed_assignment_id=assignment.id,
+        work_date=date(2026, 11, 9),
+        assignee_user_id=substitute.user_id,
+        substitute_request_id=request.id,
+    )
+    session.add_all([request, override])
+    session.commit()
+
+    shifts = await repository(session).list_published_shift_times(
+        store.id,
+        [original.id, substitute.id],
+        date(2026, 11, 2),
+        date(2026, 11, 16),
+    )
+
+    assert shifts[original.id] == [
+        (date(2026, 11, 2), time(10), time(14)),
+        (date(2026, 11, 16), time(10), time(14)),
+    ]
+    assert shifts[substitute.id] == [(date(2026, 11, 9), time(10), time(14))]
 
 
 async def test_membership_lookup_by_id_is_scoped_to_store(session: Session) -> None:
