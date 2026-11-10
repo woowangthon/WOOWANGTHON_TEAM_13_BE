@@ -6,12 +6,9 @@ from uuid import UUID
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.fixed_schedule import FixedShiftAssignment, ShiftAssignmentOverride
 from app.models.membership import Membership
-from app.models.schedule import Schedule, ScheduleAssignment, ScheduleShift
+from app.models.schedule import ScheduleAssignment, ScheduleAssignmentOverride
 from app.models.store import Store
-
-PUBLISHED_SCHEDULE = "published"
 
 
 class PayrollRepository:
@@ -102,35 +99,38 @@ class PayrollRepository:
             )
         ).all()
         member_by_user = {user_id: member_id for member_id, user_id in member_rows}
-        fixed_assignments = list(
+        schedule_assignments = list(
             (
                 await self._session.execute(
-                    select(FixedShiftAssignment).where(
-                        FixedShiftAssignment.store_id == store_id
+                    select(ScheduleAssignment).where(
+                        ScheduleAssignment.store_id == store_id
                     )
                 )
             )
             .scalars()
             .all()
         )
-        if fixed_assignments:
+        if schedule_assignments:
             overrides = (
                 await self._session.execute(
-                    select(ShiftAssignmentOverride).where(
-                        ShiftAssignmentOverride.fixed_assignment_id.in_(
-                            [item.id for item in fixed_assignments]
+                    select(ScheduleAssignmentOverride).where(
+                        ScheduleAssignmentOverride.schedule_assignment_id.in_(
+                            [item.id for item in schedule_assignments]
                         ),
-                        ShiftAssignmentOverride.work_date.between(start_date, end_date),
+                        ScheduleAssignmentOverride.work_date.between(
+                            start_date,
+                            end_date,
+                        ),
                     )
                 )
             ).scalars()
             override_map = {
-                (item.fixed_assignment_id, item.work_date): item.assignee_user_id
+                (item.schedule_assignment_id, item.work_date): item.assignee_user_id
                 for item in overrides
             }
             cursor = start_date
             while cursor <= end_date:
-                for assignment in fixed_assignments:
+                for assignment in schedule_assignments:
                     if assignment.weekday != cursor.weekday():
                         continue
                     user_id = override_map.get(
@@ -151,36 +151,4 @@ class PayrollRepository:
                 member_shifts.sort(key=lambda item: (item[0], item[1], item[2]))
             return shifts
 
-        # 고정 스케줄 도입 전 등록된 확정 스케줄을 위한 호환 경로입니다.
-        query = (
-            select(
-                ScheduleAssignment.membership_id,
-                ScheduleShift.work_date,
-                ScheduleShift.start_time,
-                ScheduleShift.end_time,
-            )
-            .join(Schedule, Schedule.id == ScheduleShift.schedule_id)
-            .join(
-                ScheduleAssignment,
-                ScheduleAssignment.schedule_shift_id == ScheduleShift.id,
-            )
-            .where(
-                Schedule.store_id == store_id,
-                Schedule.status == PUBLISHED_SCHEDULE,
-                ScheduleAssignment.membership_id.in_(membership_ids),
-                ScheduleShift.work_date >= start_date,
-                ScheduleShift.work_date <= end_date,
-            )
-            .distinct()
-            .order_by(
-                ScheduleAssignment.membership_id,
-                ScheduleShift.work_date,
-                ScheduleShift.start_time,
-                ScheduleShift.end_time,
-            )
-        )
-        for member_id, work_date, start, end in (
-            await self._session.execute(query)
-        ).all():
-            shifts[member_id].append((work_date, start, end))
         return shifts

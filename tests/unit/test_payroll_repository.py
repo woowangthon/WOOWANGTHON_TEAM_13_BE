@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, time
 from typing import Any, cast
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine
@@ -9,18 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from app.models.fixed_schedule import (
-    FixedShiftAssignment,
-    ShiftAssignmentOverride,
-    ShiftTemplate,
-    SubstituteRequest,
-)
 from app.models.membership import Membership
 from app.models.schedule import (
-    Schedule,
     ScheduleAssignment,
-    ScheduleRecommendation,
-    ScheduleShift,
+    ScheduleAssignmentOverride,
+    ShiftTemplate,
+    SubstituteRequest,
 )
 from app.models.store import Store
 from app.models.user import User
@@ -44,14 +38,10 @@ def session() -> Iterator[Session]:
         User.__table__,
         Store.__table__,
         Membership.__table__,
-        ScheduleRecommendation.__table__,
-        Schedule.__table__,
-        ScheduleShift.__table__,
-        ScheduleAssignment.__table__,
         ShiftTemplate.__table__,
-        FixedShiftAssignment.__table__,
+        ScheduleAssignment.__table__,
         SubstituteRequest.__table__,
-        ShiftAssignmentOverride.__table__,
+        ScheduleAssignmentOverride.__table__,
     ]
     User.metadata.create_all(engine, tables=tables)
     with Session(engine, expire_on_commit=False) as db_session:
@@ -90,46 +80,13 @@ def add_member(session: Session, store: Store, left: bool = False) -> Membership
     return membership
 
 
-def add_shift(
-    session: Session,
-    store: Store,
-    work_date: date,
-    members: list[UUID],
-    status: str = "published",
-) -> None:
-    schedule = Schedule(
-        id=uuid4(),
-        store_id=store.id,
-        name="11월",
-        start_date=work_date,
-        end_date=work_date,
-        status=status,
-    )
-    shift = ScheduleShift(
-        id=uuid4(),
-        schedule_id=schedule.id,
-        work_date=work_date,
-        start_time=time(9),
-        end_time=time(13),
-    )
-    session.add_all([schedule, shift])
-    session.flush()
-    session.add_all(
-        [
-            ScheduleAssignment(schedule_shift_id=shift.id, membership_id=member)
-            for member in members
-        ]
-    )
-    session.flush()
-
-
-def add_fixed_shift(
+def add_schedule_assignment(
     session: Session,
     store: Store,
     member: Membership,
     *,
     weekday: int,
-) -> FixedShiftAssignment:
+) -> ScheduleAssignment:
     template = ShiftTemplate(
         id=uuid4(),
         store_id=store.id,
@@ -139,7 +96,7 @@ def add_fixed_shift(
         role="홀",
         sort_order=0,
     )
-    assignment = FixedShiftAssignment(
+    assignment = ScheduleAssignment(
         id=uuid4(),
         store_id=store.id,
         template_id=template.id,
@@ -183,61 +140,25 @@ async def test_membership_lookup_excludes_left_and_deleted(session: Session) -> 
     )
 
 
-async def test_shift_times_include_only_my_published_shifts(session: Session) -> None:
-    store = add_store(session)
-    me = add_member(session, store)
-    other = add_member(session, store)
-    other_store = add_store(session)
-    add_shift(session, store, date(2026, 11, 2), [me.id, other.id])
-    add_shift(session, store, date(2026, 11, 3), [other.id])
-    add_shift(session, store, date(2026, 11, 4), [me.id], status="draft")
-    add_shift(session, store, date(2026, 12, 1), [me.id])
-    add_shift(session, other_store, date(2026, 11, 5), [me.id])
-    session.commit()
-
-    repo = repository(session)
-    mine = await repo.list_published_shift_times(
-        store.id, [me.id], date(2026, 10, 26), date(2026, 11, 30)
-    )
-    both = await repo.list_published_shift_times(
-        store.id, [me.id, other.id], date(2026, 10, 26), date(2026, 11, 30)
-    )
-
-    assert dict(mine) == {me.id: [(date(2026, 11, 2), time(9), time(13))]}
-    assert dict(both) == {
-        me.id: [(date(2026, 11, 2), time(9), time(13))],
-        other.id: [
-            (date(2026, 11, 2), time(9), time(13)),
-            (date(2026, 11, 3), time(9), time(13)),
-        ],
-    }
-    assert (
-        await repo.list_published_shift_times(
-            store.id, [], date(2026, 10, 26), date(2026, 11, 30)
-        )
-        == {}
-    )
-
-
-async def test_fixed_shift_and_substitute_override_drive_payroll(
+async def test_schedule_assignment_and_substitute_override_drive_payroll(
     session: Session,
 ) -> None:
     store = add_store(session)
     original = add_member(session, store)
     substitute = add_member(session, store)
-    assignment = add_fixed_shift(session, store, original, weekday=0)
+    assignment = add_schedule_assignment(session, store, original, weekday=0)
     request = SubstituteRequest(
         id=uuid4(),
         store_id=store.id,
-        fixed_assignment_id=assignment.id,
+        schedule_assignment_id=assignment.id,
         work_date=date(2026, 11, 9),
         requester_user_id=original.user_id,
         target_user_id=substitute.user_id,
         status="ACCEPTED",
     )
-    override = ShiftAssignmentOverride(
+    override = ScheduleAssignmentOverride(
         id=uuid4(),
-        fixed_assignment_id=assignment.id,
+        schedule_assignment_id=assignment.id,
         work_date=date(2026, 11, 9),
         assignee_user_id=substitute.user_id,
         substitute_request_id=request.id,

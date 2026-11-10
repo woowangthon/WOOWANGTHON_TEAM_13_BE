@@ -4,7 +4,7 @@ from typing import Any, Protocol
 from uuid import UUID
 
 from app.models.business_verification import BusinessVerification
-from app.models.fixed_schedule import ShiftTemplate
+from app.models.schedule import ShiftTemplate
 from app.models.store import Store
 from app.schemas.store import StoreCreateRequest, StoreUpdateRequest
 from app.services.business_verification import VERIFIED_STATUS

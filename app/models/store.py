@@ -17,7 +17,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 if TYPE_CHECKING:
-    from app.models.fixed_schedule import ShiftTemplate
+    from app.models.schedule import ShiftTemplate
 
 
 class Store(Base):

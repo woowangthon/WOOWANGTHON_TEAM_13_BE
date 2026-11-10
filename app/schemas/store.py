@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.schemas.fixed_schedule import ShiftTemplateInput
+from app.schemas.schedule import ShiftTemplateInput
 
 
 def _validate_payday(value: int | None) -> int | None:
