@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -117,11 +117,13 @@ class HandoverService:
         repository: HandoverRepositoryProtocol,
         store_access: StoreAccessProtocol,
         llm: LLMClient,
+        release: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
-        """인수인계 로직에 필요한 저장소와 외부 연동을 받습니다."""
+        """저장소, 권한 검사기, LLM, AI 호출 전 DB 연결 반납 함수를 받습니다."""
         self._repository = repository
         self._store_access = store_access
         self._llm = llm
+        self._release = release
 
     async def _get_note(self, store_id: UUID, note_id: UUID) -> HandoverNote:
         """매장의 노트를 조회하고 없으면 예외를 발생시킵니다."""
@@ -147,6 +149,8 @@ class HandoverService:
     ) -> HandoverDraft:
         """줄글을 저장하지 않고 체크리스트 초안으로 정리합니다."""
         await self._store_access.ensure_member(store_id, user_id)
+        if self._release is not None:
+            await self._release()
         result = await self._llm.generate_json(
             system_prompt=DRAFT_SYSTEM_PROMPT,
             user_prompt=json.dumps({"text": text}, ensure_ascii=False),

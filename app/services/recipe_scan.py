@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -142,10 +142,16 @@ def interpret_scan(result: Mapping[str, Any]) -> RecipeScanDraft:
 
 
 class RecipeScanService:
-    def __init__(self, store_access: StoreAccessProtocol, llm: LLMClient) -> None:
-        """레시피 스캔에 필요한 권한 검사기와 LLM을 받습니다."""
+    def __init__(
+        self,
+        store_access: StoreAccessProtocol,
+        llm: LLMClient,
+        release: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        """권한 검사기, LLM, AI 호출 전 DB 연결 반납 함수를 받습니다."""
         self._store_access = store_access
         self._llm = llm
+        self._release = release
 
     async def scan(
         self,
@@ -160,6 +166,8 @@ class RecipeScanService:
             raise RecipeImageTypeError
         if not image or len(image) > MAX_IMAGE_BYTES:
             raise RecipeImageSizeError
+        if self._release is not None:
+            await self._release()
         result = await self._llm.generate_json(
             system_prompt=SCAN_SYSTEM_PROMPT,
             user_prompt=SCAN_USER_PROMPT,
