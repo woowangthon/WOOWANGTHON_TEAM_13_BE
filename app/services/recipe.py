@@ -9,6 +9,14 @@ from uuid import UUID, uuid4
 from app.integrations.storage import FileStorage, StorageError
 from app.models.recipe import Recipe
 from app.schemas.recipe import RecipeCreateRequest, RecipeUpdateRequest
+from app.services.image import MAX_IMAGE_BYTES as MAX_IMAGE_BYTES
+from app.services.image import (
+    ImageStorageError,
+    ImageTooLargeError,
+    ImageTypeError,
+    check_image,
+)
+from app.services.image import detect_image_type as detect_image_type
 from app.services.store_access import StoreAccessProtocol
 
 logger = logging.getLogger(__name__)
@@ -19,26 +27,16 @@ IMAGE_FIELDS: dict[ImageSlot, str] = {
     "menu": "image_path",
     "recipe": "recipe_image_path",
 }
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
 SIGNED_URL_SECONDS = 6 * 60 * 60
-JPEG_SIGNATURE = bytes.fromhex("ffd8ff")
-PNG_SIGNATURE = bytes.fromhex("89504e470d0a1a0a")
+
+# 레시피 코드와 테스트가 쓰던 이름을 공용 사진 검사 모듈에 연결합니다.
+RecipeImageTooLargeError = ImageTooLargeError
+RecipeImageTypeError = ImageTypeError
+RecipeImageStorageError = ImageStorageError
 
 
 class RecipeNotFoundError(Exception):
     """매장에서 레시피를 찾지 못했을 때 발생합니다."""
-
-
-class RecipeImageTooLargeError(Exception):
-    """사진이 비어 있거나 10MB를 넘을 때 발생합니다."""
-
-
-class RecipeImageTypeError(Exception):
-    """JPEG, PNG, WebP가 아닌 사진일 때 발생합니다."""
-
-
-class RecipeImageStorageError(Exception):
-    """사진 저장소를 사용할 수 없을 때 발생합니다."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,17 +44,6 @@ class RecipeImage:
     """요청으로 받은 사진 내용입니다."""
 
     data: bytes
-
-
-def detect_image_type(data: bytes) -> tuple[str, str]:
-    """파일 앞부분으로 실제 사진 형식과 확장자를 판별합니다."""
-    if data.startswith(JPEG_SIGNATURE):
-        return "image/jpeg", "jpg"
-    if data.startswith(PNG_SIGNATURE):
-        return "image/png", "png"
-    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp", "webp"
-    raise RecipeImageTypeError
 
 
 def image_paths(recipes: Iterable[Recipe]) -> list[str]:
@@ -85,9 +72,7 @@ class RecipeRepositoryProtocol(Protocol):
 
 def _check_image(image: RecipeImage) -> tuple[bytes, str, str]:
     """사진 크기와 실제 형식을 검사합니다."""
-    if not image.data or len(image.data) > MAX_IMAGE_BYTES:
-        raise RecipeImageTooLargeError
-    content_type, extension = detect_image_type(image.data)
+    content_type, extension = check_image(image.data)
     return image.data, content_type, extension
 
 

@@ -271,6 +271,18 @@ uvicorn app.app:app --reload
 `INVALID` 결과로는 매장을 등록하거나 인증 정보를 변경할 수 없습니다.
 매장 대표 이미지는 `photoUrl`로 등록하거나 수정할 수 있습니다.
 
+### 매장 사진 업로드
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/v1/stores/{storeId}/photo` | 매장 사진 업로드 (사장님만) → `{ "photoUrl": "…" }` |
+
+`multipart/form-data`의 `image` 파트로 JPEG, PNG, WebP 사진을 10MB까지 받습니다.
+사진은 공개 버킷(`SUPABASE_STORE_PHOTO_BUCKET`, 기본 `store-photos`)에 저장하고 만료되지
+않는 공개 주소를 돌려줍니다. 이 API는 매장 정보를 바꾸지 않으므로, 받은 주소를 매장
+등록·수정 API의 `photoUrl`에 넣어 저장합니다. 오류 형식은 레시피 사진과 같습니다
+(`413 IMAGE_TOO_LARGE`, `415 UNSUPPORTED_IMAGE_TYPE`, `503 STORAGE_UNAVAILABLE`).
+
 ## 매뉴얼 API
 
 매뉴얼 API는 모두 Supabase access token이 필요합니다. 등록·수정·삭제와 카테고리
