@@ -161,3 +161,36 @@ def test_has_more_recipes_flag(value: object, expected: bool) -> None:
 def test_prompt_forbids_mixing_recipes() -> None:
     assert "섞지 않습니다" in SCAN_SYSTEM_PROMPT
     assert "hasMoreRecipes" in SCAN_RESPONSE_SCHEMA["required"]
+
+
+async def test_scan_releases_db_before_llm(llm: FakeLLM) -> None:
+    events: list[str] = []
+
+    async def release() -> None:
+        events.append("release")
+
+    original = llm.generate_json
+
+    async def tracked(**kwargs: Any) -> Mapping[str, Any]:
+        events.append("llm")
+        return await original(**kwargs)
+
+    llm.generate_json = tracked  # type: ignore[method-assign]
+    service = RecipeScanService(FakeStoreAccess(), llm, release=release)
+
+    await service.scan(STORE_ID, OWNER_ID, "image/jpeg", b"photo")
+
+    assert events == ["release", "llm"]
+
+
+async def test_scan_does_not_release_when_image_is_rejected(llm: FakeLLM) -> None:
+    released: list[bool] = []
+
+    async def release() -> None:
+        released.append(True)
+
+    service = RecipeScanService(FakeStoreAccess(), llm, release=release)
+
+    with pytest.raises(RecipeImageTypeError):
+        await service.scan(STORE_ID, OWNER_ID, "image/gif", b"photo")
+    assert released == []

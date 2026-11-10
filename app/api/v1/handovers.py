@@ -51,6 +51,7 @@ def get_handover_service(
             MembershipRepository(session),
         ),
         llm,
+        release=session.commit,
     )
 
 

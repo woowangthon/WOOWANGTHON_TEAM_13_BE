@@ -5,6 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     database_url: str
+    db_pool_size: int = 5
+    db_max_overflow: int = 0
+    db_pool_timeout_seconds: float = 10
 
     supabase_url: str
     supabase_secret_key: str = ""

@@ -353,3 +353,26 @@ async def test_confirm_unknown_item_is_not_found(service: HandoverService) -> No
             STAFF_ID,
             HandoverConfirmationRequest(item_id=uuid4()),
         )
+
+
+async def test_create_draft_releases_db_before_llm(
+    repository: FakeHandoverRepository,
+    llm: FakeLLM,
+) -> None:
+    events: list[str] = []
+
+    async def release() -> None:
+        events.append("release")
+
+    original = llm.generate_json
+
+    async def tracked(**kwargs: Any) -> Mapping[str, Any]:
+        events.append("llm")
+        return await original(**kwargs)
+
+    llm.generate_json = tracked  # type: ignore[method-assign]
+    service = HandoverService(repository, FakeStoreAccess(), llm, release=release)
+
+    await service.create_draft(STORE_ID, STAFF_ID, "줄글")
+
+    assert events == ["release", "llm"]

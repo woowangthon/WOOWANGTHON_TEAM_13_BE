@@ -38,7 +38,7 @@ def get_recipe_scan_service(
         StoreRepository(session),
         MembershipRepository(session),
     )
-    return RecipeScanService(store_access, llm)
+    return RecipeScanService(store_access, llm, release=session.commit)
 
 
 @contextmanager
