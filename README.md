@@ -398,6 +398,31 @@ AI 사수의 근거 문서가 되고, 일반 매뉴얼 API로 수정·삭제할 
 | `DELETE` | `/api/v1/stores/{storeId}/handover-notes/{noteId}` | 삭제 |
 | `POST` | `/api/v1/stores/{storeId}/handover-notes/{noteId}/confirmations` | 항목 또는 노트 전체 체크 |
 
+## 알림 API
+
+알림 테이블을 따로 두지 않고, 목록을 조회할 때 기존 데이터(대타 요청, 사장님께 물어보기,
+인수인계)를 모아 최근 14일 알림을 최신 순으로 최대 50개 반환합니다. 서버 예약 작업이
+없어서 서버가 잠들어도 동작합니다. 휴대폰 푸시는 없고 앱 안 알림입니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/api/v1/stores/{storeId}/notifications` | 배너, 알림 목록, 안 읽은 개수 |
+| `POST` | `/api/v1/stores/{storeId}/notifications/read` | 지금까지의 알림 모두 읽음 (204) |
+
+| 받는 사람 | `type` | 알림 | `target.kind` |
+| --- | --- | --- | --- |
+| 알바생 | `SUBSTITUTE_REQUESTED` | 나에게 온 대타 요청 (취소 제외) | `substitute_request` |
+| 알바생 | `SUBSTITUTE_ACCEPTED` | 내가 보낸 대타 요청을 상대가 수락 | `substitute_request` |
+| 알바생 | `OWNER_ANSWERED` | 사장님이 내 질문에 답함 | `assistant_chat` |
+| 사장님 | `HANDOVER_CREATED` | 다른 사람이 인수인계를 남김 | `handover` |
+| 사장님 | `OWNER_QUESTION_ASKED` | 알바생이 질문을 넘김 | `owner_question` |
+
+- 읽음은 알림 화면을 연 시각 하나로 관리합니다. 그 시각 이전 알림은 `isRead: true`입니다.
+- `banner`는 알바생에게만 내려갑니다. 오늘(한국 시간) 근무 시작 30분 전부터 퇴근 전까지,
+  최근 7일 인수인계 중 아직 체크되지 않은 항목을 담습니다. 그 밖의 시간에는 `null`입니다.
+- 근무 시간은 고정 스케줄과 대타로 바뀐 날짜별 담당자를 반영합니다.
+- 사장님이나 재직 중인 구성원이 아니면 `404`입니다.
+
 ## 예상 급여 API
 
 예상 급여는 AI가 아니라 규칙 기반 코드로 계산합니다. 사장님이 확정한(`published`)
