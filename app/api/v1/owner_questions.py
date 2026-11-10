@@ -8,8 +8,11 @@ from fastapi.responses import JSONResponse
 
 from app.api.dependencies import get_active_user
 from app.api.v1.assistant_chats import get_owner_question_service
+from app.integrations.llm import LLMError
 from app.models.user import User
 from app.schemas.owner_question import (
+    ManualDraftRequest,
+    ManualDraftResponse,
     OwnerQuestionAnswerRequest,
     OwnerQuestionAnswerResponse,
     OwnerQuestionItem,
@@ -145,3 +148,35 @@ async def answer_owner_question(
         **item.model_dump(),
         manual_id=view.manual_id,
     )
+
+
+@router.post(
+    "/{question_id}/manual-draft",
+    response_model=ManualDraftResponse,
+    responses={
+        status.HTTP_503_SERVICE_UNAVAILABLE: {"description": "AI_UNAVAILABLE"},
+    },
+)
+async def draft_manual_from_answer(
+    store_id: UUID,
+    question_id: UUID,
+    request: ManualDraftRequest,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[OwnerQuestionService, Depends(get_owner_question_service)],
+) -> ManualDraftResponse | JSONResponse:
+    """질문과 사장님 답변을 AI로 매뉴얼 초안으로 정리합니다. 저장하지 않습니다."""
+    try:
+        with _translate_errors():
+            draft = await service.manual_draft(
+                store_id,
+                question_id,
+                user.id,
+                request.answer,
+            )
+    except LLMError:
+        return _error_response(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "AI_UNAVAILABLE",
+            "AI가 정리하지 못했어요. 직접 작성하거나 잠시 후 다시 시도해 주세요",
+        )
+    return ManualDraftResponse(title=draft.title or "", body=draft.body or "")

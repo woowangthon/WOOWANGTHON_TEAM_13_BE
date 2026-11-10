@@ -62,3 +62,21 @@ class OwnerQuestionListResponse(OwnerQuestionSchema):
 
 class OwnerQuestionAnswerResponse(OwnerQuestionItem):
     manual_id: UUID | None
+
+
+class ManualDraftRequest(OwnerQuestionSchema):
+    answer: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("answer")
+    @classmethod
+    def strip_answer(cls, value: str) -> str:
+        """답변의 공백을 검사합니다."""
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("value must not be blank")
+        return stripped
+
+
+class ManualDraftResponse(OwnerQuestionSchema):
+    title: str
+    body: str

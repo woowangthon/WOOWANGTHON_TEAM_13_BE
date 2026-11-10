@@ -381,10 +381,17 @@ AI 사수의 근거 문서가 되고, 일반 매뉴얼 API로 수정·삭제할 
 `addToManual`이 `false`이면 위 필드는 무시합니다. 답변 응답의 `manualId`는 만들어진
 매뉴얼 ID이고, 매뉴얼을 만들지 않았으면 `null`입니다.
 
+`POST .../owner-questions/{questionId}/manual-draft`에 `{ "answer": "…" }`를 보내면
+Gemini가 질문과 답변을 매뉴얼 제목·본문 초안(`{ "title", "body" }`)으로 정리합니다.
+초안은 저장하지 않으며, 사장님이 확인·수정한 뒤 답변 API의 `manualTitle`,
+`manualBody`로 저장합니다. 질문과 답변에 없는 내용은 쓰지 않도록 지시하고, 두 값은
+지시가 아닌 자료로 전달합니다. AI 호출이 실패하면 `503 AI_UNAVAILABLE`을 반환합니다.
+
 | Method | 경로 | 설명 |
 | --- | --- | --- |
 | `POST` | `/api/v1/stores/{storeId}/assistant-chats/{chatId}/messages/{messageId}/owner-questions` | 질문 넘기기 |
 | `GET` | `/api/v1/stores/{storeId}/owner-questions?status=asked` | 사장님 질문 목록 |
+| `POST` | `/api/v1/stores/{storeId}/owner-questions/{questionId}/manual-draft` | 답변을 AI 매뉴얼 초안으로 정리 (저장 안 함) |
 | `POST` | `/api/v1/stores/{storeId}/owner-questions/{questionId}/answer` | 사장님 답변 |
 
 | 상황 | 응답 |
