@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.fixed_schedule import ShiftTemplateInput
+
 
 def _validate_payday(value: int | None) -> int | None:
     if value is not None and not 1 <= value <= 31:
@@ -34,6 +36,20 @@ class StoreCreateRequest(StoreSchema):
     photo_url: str | None = Field(default=None, max_length=2048)
     payday: int | None = None
     business_size: BusinessSize | None = None
+    shift_templates: list[ShiftTemplateInput] = Field(
+        default_factory=list,
+        max_length=20,
+    )
+
+    @field_validator("shift_templates")
+    @classmethod
+    def reject_duplicate_template_names(
+        cls, value: list[ShiftTemplateInput]
+    ) -> list[ShiftTemplateInput]:
+        names = [item.name for item in value]
+        if len(names) != len(set(names)):
+            raise ValueError("shift template names must be unique")
+        return value
 
     @field_validator("name", "address")
     @classmethod

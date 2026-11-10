@@ -118,9 +118,7 @@ class StubAvailabilityService:
     ) -> tuple[AvailabilityPeriod, list[StoreAvailabilityView]]:
         self._raise()
         availability = make_availability()
-        return PERIOD, [
-            StoreAvailabilityView(make_membership(), availability, PERIOD)
-        ]
+        return PERIOD, [StoreAvailabilityView(make_membership(), availability, PERIOD)]
 
     async def list_submissions(
         self,
@@ -152,13 +150,12 @@ def url(suffix: str) -> str:
     return f"/stores/{STORE_ID}{suffix}"
 
 
-def test_availability_routes_are_registered() -> None:
+def test_legacy_availability_routes_are_not_exposed() -> None:
     paths = app.openapi()["paths"]
 
-    assert "/api/v1/stores/{store_id}/availabilities/me" in paths
-    assert "/api/v1/stores/{store_id}/availabilities" in paths
-    assert "/api/v1/stores/{store_id}/availabilities/{availability_id}" in paths
-    assert "/api/v1/stores/{store_id}/availability-submissions" in paths
+    assert "/api/v1/stores/{store_id}/availabilities/me" not in paths
+    assert "/api/v1/stores/{store_id}/availabilities" not in paths
+    assert "/api/v1/stores/{store_id}/availability-submissions" not in paths
 
 
 def test_get_my_availability_before_submission() -> None:
@@ -191,9 +188,7 @@ def test_create_availability_uses_fe_contract() -> None:
 
     assert response.status_code == 201
     assert response.json()["availabilityId"] == str(AVAILABILITY_ID)
-    assert response.json()["days"] == [
-        {"date": "2026-12-15", "status": "unavailable"}
-    ]
+    assert response.json()["days"] == [{"date": "2026-12-15", "status": "unavailable"}]
     assert service.seen_create == ("2026-12", 1, "기말고사")
 
 

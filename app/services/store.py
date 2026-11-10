@@ -1,9 +1,10 @@
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from typing import Any, Protocol
 from uuid import UUID
 
 from app.models.business_verification import BusinessVerification
+from app.models.fixed_schedule import ShiftTemplate
 from app.models.store import Store
 from app.schemas.store import StoreCreateRequest, StoreUpdateRequest
 from app.services.business_verification import VERIFIED_STATUS
@@ -43,15 +44,11 @@ class StoreService:
     def __init__(
         self,
         repository: StoreRepositoryProtocol,
-        business_verification_repository: (
-            BusinessVerificationRepositoryProtocol
-        ),
+        business_verification_repository: (BusinessVerificationRepositoryProtocol),
     ) -> None:
         """매장 비즈니스 로직에 사용할 저장소를 받습니다."""
         self._repository = repository
-        self._business_verification_repository = (
-            business_verification_repository
-        )
+        self._business_verification_repository = business_verification_repository
 
     async def create(
         self,
@@ -71,8 +68,23 @@ class StoreService:
             photo_url=request.photo_url,
             payday=request.payday,
             business_size=request.business_size,
+            shift_templates=[
+                ShiftTemplate(
+                    name=item.name,
+                    start_time=self._parse_time(item.start),
+                    end_time=self._parse_time(item.end),
+                    role=item.role,
+                    sort_order=item.sort_order,
+                )
+                for item in request.shift_templates
+            ],
         )
         return await self._repository.create(store)
+
+    @staticmethod
+    def _parse_time(value: str) -> time:
+        hour, minute = (int(part) for part in value.split(":"))
+        return time(hour, minute)
 
     async def list_for_owner(self, owner_id: UUID) -> list[Store]:
         """로그인한 사용자가 소유한 매장 목록을 조회합니다."""
