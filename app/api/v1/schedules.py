@@ -1,45 +1,52 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_active_user
 from app.db.session import get_db
-from app.models.schedule import Schedule, ScheduleRecommendation
+from app.models.schedule import (
+    ScheduleAssignment,
+    ShiftTemplate,
+    SubstituteRequest,
+)
 from app.models.user import User
 from app.repositories.membership import MembershipRepository
 from app.repositories.schedule import ScheduleRepository
 from app.repositories.store import StoreRepository
 from app.schemas.schedule import (
-    MyScheduleResponse,
-    MyScheduleShiftResponse,
-    RecommendationCreateRequest,
-    RecommendationCreateResponse,
-    RecommendationDetailResponse,
-    RecommendationListResponse,
-    RecommendationRules,
-    RecommendationShiftResponse,
-    RecommendationSummaryResponse,
+    CalendarShiftResponse,
     ScheduleAssignmentResponse,
-    ScheduleCreateRequest,
-    ScheduleListResponse,
+    ScheduleCalendarResponse,
+    ScheduleReplaceRequest,
     ScheduleResponse,
-    ScheduleShiftResponse,
-    ScheduleUpdateRequest,
+    ScheduleWorkerListResponse,
+    ScheduleWorkerResponse,
+    ShiftTemplateCreateRequest,
+    ShiftTemplateListResponse,
+    ShiftTemplateResponse,
+    ShiftTemplateUpdateRequest,
+    SubstituteRequestCreate,
+    SubstituteRequestListResponse,
+    SubstituteRequestResponse,
+    SubstituteRequestStatus,
 )
 from app.services.schedule import (
-    RecommendationNotFoundError,
-    ScheduleAlreadyConfirmedError,
-    ScheduleAssignmentConflictError,
-    ScheduleInvalidMemberError,
-    ScheduleNotFoundError,
+    InvalidScheduleWorkerError,
+    ScheduleAssignmentNotFoundError,
     ScheduleService,
-    ScheduleStaffOnlyError,
+    ScheduleWorker,
+    ShiftTemplateNotFoundError,
+    SubstitutePastDateError,
+    SubstituteRequestConflictError,
+    SubstituteRequestForbiddenError,
+    SubstituteRequestNotFoundError,
+    SubstituteTargetConflictError,
 )
 from app.services.store import StoreNotFoundError
 from app.services.store_access import StoreAccessForbiddenError, StoreAccessService
@@ -53,7 +60,6 @@ def get_schedule_service(
     memberships = MembershipRepository(session)
     return ScheduleService(
         ScheduleRepository(session),
-        memberships,
         StoreAccessService(StoreRepository(session), memberships),
     )
 
@@ -66,7 +72,7 @@ def _error(status_code: int, code: str, message: str) -> JSONResponse:
 
 
 @contextmanager
-def _translate_errors() -> Iterator[None]:
+def _translate_access() -> Iterator[None]:
     try:
         yield
     except StoreAccessForbiddenError:
@@ -79,307 +85,340 @@ def _translate_errors() -> Iterator[None]:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Store not found",
         ) from None
-    except RecommendationNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Schedule recommendation not found",
-        ) from None
-    except ScheduleNotFoundError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Schedule not found",
-        ) from None
 
 
 def _time_text(value) -> str:
     return value.strftime("%H:%M")
 
 
-def _recommendation_summary(
-    item: ScheduleRecommendation,
-) -> RecommendationSummaryResponse:
-    return RecommendationSummaryResponse(
-        recommendation_id=item.id,
-        batch_id=item.batch_id,
-        candidate_no=item.candidate_no,
-        start_date=item.start_date,
-        end_date=item.end_date,
-        unfilled_slots=item.unfilled_slots,
-        created_at=item.created_at,
-    )
-
-
-def _recommendation_detail(
-    item: ScheduleRecommendation,
-    names: dict[UUID, str],
-) -> RecommendationDetailResponse:
-    warnings: list[str] = []
-    shifts: list[RecommendationShiftResponse] = []
-    for shift in item.shifts:
-        shortage = shift.required_staff - len(shift.assignments)
-        if shortage > 0:
-            warnings.append(
-                f"{shift.work_date.isoformat()} {_time_text(shift.start_time)}-"
-                f"{_time_text(shift.end_time)} 근무가 {shortage}명 부족해요"
-            )
-        shifts.append(
-            RecommendationShiftResponse(
-                shift_id=shift.id,
-                date=shift.work_date,
-                start=_time_text(shift.start_time),
-                end=_time_text(shift.end_time),
-                role=shift.role,
-                required_staff=shift.required_staff,
-                assignments=[
-                    ScheduleAssignmentResponse(
-                        member_id=assignment.membership_id,
-                        staff_name=names.get(assignment.membership_id, "퇴사한 직원"),
-                    )
-                    for assignment in shift.assignments
-                ],
-            )
-        )
-    return RecommendationDetailResponse(
-        **_recommendation_summary(item).model_dump(),
-        rules=RecommendationRules(
-            maximum_weekly_hours=item.maximum_weekly_hours,
-            minimum_rest_minutes=item.minimum_rest_minutes,
-        ),
-        shifts=shifts,
-        warnings=warnings,
-    )
-
-
-def _schedule_response(
-    item: Schedule,
-    names: dict[UUID, str],
-) -> ScheduleResponse:
-    return ScheduleResponse(
-        schedule_id=item.id,
-        recommendation_id=item.recommendation_id,
+def _template_response(item: ShiftTemplate) -> ShiftTemplateResponse:
+    return ShiftTemplateResponse(
+        template_id=item.id,
         name=item.name,
-        start_date=item.start_date,
-        end_date=item.end_date,
-        status=cast(Literal["draft", "published"], item.status),
-        published_at=item.published_at,
-        shifts=[
-            ScheduleShiftResponse(
-                shift_id=shift.id,
-                date=shift.work_date,
-                start=_time_text(shift.start_time),
-                end=_time_text(shift.end_time),
-                role=shift.role,
-                assignments=[
-                    ScheduleAssignmentResponse(
-                        member_id=assignment.membership_id,
-                        staff_name=names.get(assignment.membership_id, "퇴사한 직원"),
-                    )
-                    for assignment in shift.assignments
-                ],
-            )
-            for shift in item.shifts
-        ],
+        start=_time_text(item.start_time),
+        end=_time_text(item.end_time),
+        role=item.role,
+        sort_order=item.sort_order,
+    )
+
+
+def _worker_response(item: ScheduleWorker) -> ScheduleWorkerResponse:
+    return ScheduleWorkerResponse(
+        user_id=item.user_id,
+        member_id=item.member_id,
+        name=item.name,
+        role=item.role,
+    )
+
+
+def _worker(workers: dict[UUID, ScheduleWorker], user_id: UUID) -> ScheduleWorker:
+    return workers.get(
+        user_id,
+        ScheduleWorker(
+            user_id=user_id,
+            member_id=None,
+            name="퇴사한 직원",
+            role="staff",
+        ),
+    )
+
+
+def _assignment_response(
+    item: ScheduleAssignment,
+    workers: dict[UUID, ScheduleWorker],
+) -> ScheduleAssignmentResponse:
+    return ScheduleAssignmentResponse(
+        assignment_id=item.id,
+        template=_template_response(item.template),
+        weekday=item.weekday,
+        assignee=_worker_response(_worker(workers, item.assignee_user_id)),
+    )
+
+
+def _request_response(
+    item: SubstituteRequest,
+    workers: dict[UUID, ScheduleWorker],
+) -> SubstituteRequestResponse:
+    return SubstituteRequestResponse(
+        request_id=item.id,
+        status=cast(SubstituteRequestStatus, item.status),
+        date=item.work_date,
+        assignment_id=item.schedule_assignment_id,
+        shift_name=item.assignment.template.name,
+        start=_time_text(item.assignment.template.start_time),
+        end=_time_text(item.assignment.template.end_time),
+        requester=_worker_response(_worker(workers, item.requester_user_id)),
+        target=_worker_response(_worker(workers, item.target_user_id)),
+        is_read=item.target_read_at is not None,
         created_at=item.created_at,
-        updated_at=item.updated_at,
+        responded_at=item.responded_at,
+    )
+
+
+@router.get("/schedule-workers", response_model=ScheduleWorkerListResponse)
+async def list_schedule_workers(
+    store_id: UUID,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[ScheduleService, Depends(get_schedule_service)],
+) -> ScheduleWorkerListResponse:
+    with _translate_access():
+        workers = await service.workers(store_id, user.id)
+    return ScheduleWorkerListResponse(
+        workers=[_worker_response(item) for item in workers]
     )
 
 
 @router.post(
-    "/schedule-recommendations",
-    response_model=RecommendationCreateResponse,
+    "/shift-templates",
+    response_model=ShiftTemplateResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_schedule_recommendations(
+async def create_shift_template(
     store_id: UUID,
-    request: RecommendationCreateRequest,
+    request: ShiftTemplateCreateRequest,
     user: Annotated[User, Depends(get_active_user)],
     service: Annotated[ScheduleService, Depends(get_schedule_service)],
-) -> RecommendationCreateResponse:
-    """제출된 가능 시간을 바탕으로 서로 다른 추천 후보를 생성합니다."""
-    with _translate_errors():
-        recommendations = await service.create_recommendations(
-            store_id, user.id, request
+) -> ShiftTemplateResponse:
+    with _translate_access():
+        item = await service.create_template(store_id, user.id, request)
+    return _template_response(item)
+
+
+@router.get("/shift-templates", response_model=ShiftTemplateListResponse)
+async def list_shift_templates(
+    store_id: UUID,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[ScheduleService, Depends(get_schedule_service)],
+) -> ShiftTemplateListResponse:
+    with _translate_access():
+        items = await service.list_templates(store_id, user.id)
+    return ShiftTemplateListResponse(
+        templates=[_template_response(item) for item in items]
+    )
+
+
+@router.patch("/shift-templates/{template_id}", response_model=ShiftTemplateResponse)
+async def update_shift_template(
+    store_id: UUID,
+    template_id: UUID,
+    request: ShiftTemplateUpdateRequest,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[ScheduleService, Depends(get_schedule_service)],
+) -> ShiftTemplateResponse | JSONResponse:
+    try:
+        with _translate_access():
+            item = await service.update_template(
+                store_id, template_id, user.id, request
+            )
+    except ShiftTemplateNotFoundError:
+        return _error(404, "SHIFT_TEMPLATE_NOT_FOUND", "근무 템플릿을 찾을 수 없어요")
+    except ValueError:
+        return _error(
+            422, "INVALID_SHIFT_TIME", "종료 시간은 시작 시간보다 늦어야 해요"
         )
-    names = await service.member_names(store_id)
-    return RecommendationCreateResponse(
-        batch_id=recommendations[0].batch_id,
-        recommendations=[
-            _recommendation_detail(item, names) for item in recommendations
+    return _template_response(item)
+
+
+@router.delete("/shift-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_shift_template(
+    store_id: UUID,
+    template_id: UUID,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[ScheduleService, Depends(get_schedule_service)],
+) -> Response:
+    try:
+        with _translate_access():
+            await service.delete_template(store_id, template_id, user.id)
+    except ShiftTemplateNotFoundError:
+        raise HTTPException(
+            status_code=404, detail="Shift template not found"
+        ) from None
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.put("/fixed-schedule", response_model=ScheduleResponse)
+async def replace_schedule(
+    store_id: UUID,
+    request: ScheduleReplaceRequest,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[ScheduleService, Depends(get_schedule_service)],
+) -> ScheduleResponse | JSONResponse:
+    try:
+        with _translate_access():
+            await service.replace_schedule(store_id, user.id, request.assignments)
+            items, workers = await service.schedule(store_id, user.id)
+    except ShiftTemplateNotFoundError:
+        return _error(
+            422, "INVALID_SHIFT_TEMPLATE", "다른 매장의 템플릿이 포함되어 있어요"
+        )
+    except InvalidScheduleWorkerError:
+        return _error(
+            422, "INVALID_SCHEDULE_WORKER", "배정할 수 없는 구성원이 포함되어 있어요"
+        )
+    return ScheduleResponse(
+        assignments=[_assignment_response(item, workers) for item in items]
+    )
+
+
+@router.get("/fixed-schedule", response_model=ScheduleResponse)
+async def get_schedule(
+    store_id: UUID,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[ScheduleService, Depends(get_schedule_service)],
+) -> ScheduleResponse:
+    with _translate_access():
+        items, workers = await service.schedule(store_id, user.id)
+    return ScheduleResponse(
+        assignments=[_assignment_response(item, workers) for item in items]
+    )
+
+
+@router.get("/schedule-calendar", response_model=ScheduleCalendarResponse)
+async def get_schedule_calendar(
+    store_id: UUID,
+    start_date: Annotated[date, Query(alias="startDate")],
+    end_date: Annotated[date, Query(alias="endDate")],
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[ScheduleService, Depends(get_schedule_service)],
+) -> ScheduleCalendarResponse | JSONResponse:
+    try:
+        with _translate_access():
+            occurrences, workers = await service.calendar(
+                store_id, user.id, start_date, end_date
+            )
+    except ValueError:
+        return _error(
+            422,
+            "INVALID_CALENDAR_PERIOD",
+            "조회 기간은 시작일부터 최대 63일까지 가능해요",
+        )
+    return ScheduleCalendarResponse(
+        start_date=start_date,
+        end_date=end_date,
+        shifts=[
+            CalendarShiftResponse(
+                assignment_id=assignment.id,
+                template_id=assignment.template_id,
+                date=work_date,
+                name=assignment.template.name,
+                start=_time_text(assignment.template.start_time),
+                end=_time_text(assignment.template.end_time),
+                role=assignment.template.role,
+                assignee=_worker_response(_worker(workers, assignee_id)),
+                substituted=substituted,
+            )
+            for assignment, work_date, assignee_id, substituted in occurrences
         ],
     )
 
 
-@router.get(
-    "/schedule-recommendations",
-    response_model=RecommendationListResponse,
+@router.post(
+    "/substitute-requests",
+    response_model=SubstituteRequestResponse,
+    status_code=status.HTTP_201_CREATED,
 )
-async def list_schedule_recommendations(
+async def create_substitute_request(
     store_id: UUID,
+    request: SubstituteRequestCreate,
     user: Annotated[User, Depends(get_active_user)],
     service: Annotated[ScheduleService, Depends(get_schedule_service)],
-) -> RecommendationListResponse:
-    """생성된 추천 후보 목록을 최신 순서로 조회합니다."""
-    with _translate_errors():
-        items = await service.list_recommendations(store_id, user.id)
-    return RecommendationListResponse(
-        recommendations=[_recommendation_summary(item) for item in items]
-    )
-
-
-@router.get(
-    "/schedule-recommendations/{recommendation_id}",
-    response_model=RecommendationDetailResponse,
-)
-async def get_schedule_recommendation(
-    store_id: UUID,
-    recommendation_id: UUID,
-    user: Annotated[User, Depends(get_active_user)],
-    service: Annotated[ScheduleService, Depends(get_schedule_service)],
-) -> RecommendationDetailResponse:
-    """추천 후보의 근무 칸과 직원 배정을 조회합니다."""
-    with _translate_errors():
-        item = await service.get_recommendation(
-            store_id, recommendation_id, user.id
+) -> SubstituteRequestResponse | JSONResponse:
+    try:
+        with _translate_access():
+            item, workers = await service.create_substitute_request(
+                store_id,
+                user.id,
+                request.assignment_id,
+                request.date,
+                request.target_user_id,
+            )
+    except ScheduleAssignmentNotFoundError:
+        return _error(404, "SHIFT_NOT_FOUND", "해당 날짜의 근무를 찾을 수 없어요")
+    except InvalidScheduleWorkerError:
+        return _error(422, "INVALID_SUBSTITUTE", "대타로 지정할 수 없는 사용자예요")
+    except SubstitutePastDateError:
+        return _error(422, "PAST_SHIFT", "지난 근무에는 대타를 요청할 수 없어요")
+    except SubstituteRequestForbiddenError:
+        return _error(403, "NOT_ASSIGNEE", "현재 근무자만 대타를 요청할 수 있어요")
+    except SubstituteRequestConflictError:
+        return _error(
+            409, "SUBSTITUTE_REQUEST_CONFLICT", "이미 진행 중인 대타 요청이 있어요"
         )
-    names = await service.member_names(store_id)
-    return _recommendation_detail(item, names)
+    except SubstituteTargetConflictError:
+        return _error(409, "SUBSTITUTE_TIME_CONFLICT", "상대방의 근무 시간이 겹쳐요")
+    return _request_response(item, workers)
+
+
+@router.get("/substitute-requests", response_model=SubstituteRequestListResponse)
+async def list_substitute_requests(
+    store_id: UUID,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[ScheduleService, Depends(get_schedule_service)],
+    box: Annotated[Literal["received", "sent"], Query()] = "received",
+    request_status: Annotated[
+        SubstituteRequestStatus | None, Query(alias="status")
+    ] = None,
+) -> SubstituteRequestListResponse:
+    with _translate_access():
+        items, workers = await service.list_substitute_requests(
+            store_id, user.id, box, request_status
+        )
+    return SubstituteRequestListResponse(
+        requests=[_request_response(item, workers) for item in items]
+    )
 
 
 @router.post(
-    "/schedules",
-    response_model=ScheduleResponse,
-    status_code=status.HTTP_201_CREATED,
+    "/substitute-requests/{request_id}/accept",
+    response_model=SubstituteRequestResponse,
 )
-async def create_schedule(
+async def accept_substitute_request(
     store_id: UUID,
-    request: ScheduleCreateRequest,
+    request_id: UUID,
     user: Annotated[User, Depends(get_active_user)],
     service: Annotated[ScheduleService, Depends(get_schedule_service)],
-) -> ScheduleResponse | JSONResponse:
-    """추천 후보 하나를 실제 스케줄로 등록합니다."""
+) -> SubstituteRequestResponse | JSONResponse:
+    return await _respond(store_id, request_id, user.id, service, accept=True)
+
+
+@router.post(
+    "/substitute-requests/{request_id}/reject",
+    response_model=SubstituteRequestResponse,
+)
+async def reject_substitute_request(
+    store_id: UUID,
+    request_id: UUID,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[ScheduleService, Depends(get_schedule_service)],
+) -> SubstituteRequestResponse | JSONResponse:
+    return await _respond(store_id, request_id, user.id, service, accept=False)
+
+
+async def _respond(
+    store_id: UUID,
+    request_id: UUID,
+    user_id: UUID,
+    service: ScheduleService,
+    *,
+    accept: bool,
+) -> SubstituteRequestResponse | JSONResponse:
     try:
-        with _translate_errors():
-            item = await service.create_schedule(
-                store_id,
-                request.recommendation_id,
-                user.id,
-                request.name,
-                publish=request.publish,
+        with _translate_access():
+            item, workers = await service.respond_substitute_request(
+                store_id, request_id, user_id, accept=accept
             )
-    except ScheduleAlreadyConfirmedError:
+    except SubstituteRequestNotFoundError:
+        return _error(404, "SUBSTITUTE_REQUEST_NOT_FOUND", "대타 요청을 찾을 수 없어요")
+    except SubstituteRequestForbiddenError:
+        return _error(403, "NOT_SUBSTITUTE_TARGET", "요청받은 사람만 응답할 수 있어요")
+    except SubstituteRequestConflictError:
         return _error(
-            status.HTTP_409_CONFLICT,
-            "SCHEDULE_ALREADY_CONFIRMED",
-            "이미 스케줄로 등록한 추천 후보예요",
+            409, "SUBSTITUTE_REQUEST_CONFLICT", "이미 처리됐거나 근무자가 변경됐어요"
         )
-    names = await service.member_names(store_id)
-    return _schedule_response(item, names)
-
-
-@router.get("/schedules", response_model=ScheduleListResponse)
-async def list_schedules(
-    store_id: UUID,
-    user: Annotated[User, Depends(get_active_user)],
-    service: Annotated[ScheduleService, Depends(get_schedule_service)],
-    start_date: Annotated[date | None, Query(alias="startDate")] = None,
-    end_date: Annotated[date | None, Query(alias="endDate")] = None,
-) -> ScheduleListResponse:
-    """사장님이 등록한 스케줄을 기간으로 조회합니다."""
-    with _translate_errors():
-        items = await service.list_schedules(
-            store_id, user.id, start_date, end_date
-        )
-    names = await service.member_names(store_id)
-    return ScheduleListResponse(
-        schedules=[_schedule_response(item, names) for item in items]
-    )
-
-
-@router.patch("/schedules/{schedule_id}", response_model=ScheduleResponse)
-async def update_schedule(
-    store_id: UUID,
-    schedule_id: UUID,
-    request: ScheduleUpdateRequest,
-    user: Annotated[User, Depends(get_active_user)],
-    service: Annotated[ScheduleService, Depends(get_schedule_service)],
-) -> ScheduleResponse | JSONResponse:
-    """스케줄의 근무 배정을 조정하거나 공개 상태를 변경합니다."""
-    try:
-        with _translate_errors():
-            item = await service.update_schedule(
-                store_id, schedule_id, user.id, request
-            )
-    except ScheduleInvalidMemberError:
+    except InvalidScheduleWorkerError:
+        return _error(422, "INVALID_SUBSTITUTE", "현재 대타를 맡을 수 없는 사용자예요")
+    except SubstituteTargetConflictError:
         return _error(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "INVALID_MEMBER",
-            "배정할 수 없는 구성원이 포함되어 있어요",
+            409, "SUBSTITUTE_TIME_CONFLICT", "현재 근무 시간과 겹쳐 수락할 수 없어요"
         )
-    except ScheduleAssignmentConflictError:
-        return _error(
-            status.HTTP_409_CONFLICT,
-            "ASSIGNMENT_CONFLICT",
-            "같은 직원의 근무 시간이 겹쳐요",
-        )
-    names = await service.member_names(store_id)
-    return _schedule_response(item, names)
-
-
-@router.get("/schedules/me", response_model=MyScheduleResponse)
-async def get_my_schedule(
-    store_id: UUID,
-    user: Annotated[User, Depends(get_active_user)],
-    service: Annotated[ScheduleService, Depends(get_schedule_service)],
-) -> MyScheduleResponse | JSONResponse:
-    """알바생이 공개된 본인 근무표를 조회합니다."""
-    try:
-        with _translate_errors():
-            today, week_start, member, schedules, names = await service.my_schedule(
-                store_id, user.id
-            )
-    except ScheduleStaffOnlyError:
-        return _error(
-            status.HTTP_403_FORBIDDEN,
-            "FORBIDDEN",
-            "알바생만 내 근무표를 조회할 수 있어요",
-        )
-
-    shifts: list[MyScheduleShiftResponse] = []
-    week_minutes = 0
-    week_end = week_start + timedelta(days=6)
-    for schedule in schedules:
-        for shift in schedule.shifts:
-            assigned_ids = {item.membership_id for item in shift.assignments}
-            if member.id not in assigned_ids:
-                continue
-            if week_start <= shift.work_date <= week_end:
-                start_minutes = shift.start_time.hour * 60 + shift.start_time.minute
-                end_minutes = shift.end_time.hour * 60 + shift.end_time.minute
-                week_minutes += end_minutes - start_minutes
-            shifts.append(
-                MyScheduleShiftResponse(
-                    shift_id=shift.id,
-                    date=shift.work_date,
-                    start=_time_text(shift.start_time),
-                    end=_time_text(shift.end_time),
-                    role=shift.role,
-                    crew=[
-                        names.get(item.membership_id, "퇴사한 직원")
-                        for item in shift.assignments
-                        if item.membership_id != member.id
-                    ],
-                )
-            )
-    shifts.sort(key=lambda item: (item.date, item.start))
-    week_hours = week_minutes / 60
-    if week_hours >= 15:
-        note = f"이번 주 {week_hours:g}시간 · 주휴수당 대상"
-    else:
-        note = f"이번 주 {week_hours:g}시간 · {15 - week_hours:g}시간 더 필요"
-    return MyScheduleResponse(
-        today=today,
-        week_start=week_start,
-        week_hours=week_hours,
-        week_note=note,
-        shifts=shifts,
-    )
+    return _request_response(item, workers)

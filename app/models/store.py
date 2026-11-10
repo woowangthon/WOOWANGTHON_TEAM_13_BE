@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -11,9 +12,12 @@ from sqlalchemy import (
     Uuid,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+
+if TYPE_CHECKING:
+    from app.models.schedule import ShiftTemplate
 
 
 class Store(Base):
@@ -22,12 +26,11 @@ class Store(Base):
     __tablename__ = "stores"
     __table_args__ = (
         CheckConstraint(
-            "payday IS NULL OR payday BETWEEN 1 AND 28 OR payday = 31",
+            "payday IS NULL OR payday BETWEEN 1 AND 31",
             name="ck_stores_payday",
         ),
         CheckConstraint(
-            "business_size IS NULL OR "
-            "business_size IN ('UNDER_FIVE', 'FIVE_OR_MORE')",
+            "business_size IS NULL OR business_size IN ('UNDER_FIVE', 'FIVE_OR_MORE')",
             name="ck_stores_business_size",
         ),
     )
@@ -63,4 +66,8 @@ class Store(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    shift_templates: Mapped[list["ShiftTemplate"]] = relationship(
+        cascade="all, delete-orphan",
+        lazy="raise",
     )

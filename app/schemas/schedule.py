@@ -11,13 +11,13 @@ def _to_camel(value: str) -> str:
 
 
 def _valid_time(value: str) -> str:
-    parts = value.split(":")
-    if len(parts) != 2:
-        raise ValueError("time must use HH:MM format")
     try:
-        hour, minute = (int(part) for part in parts)
-    except ValueError as exc:
+        hour_text, minute_text = value.split(":", maxsplit=1)
+        hour, minute = int(hour_text), int(minute_text)
+    except (TypeError, ValueError) as exc:
         raise ValueError("time must use HH:MM format") from exc
+    if len(hour_text) != 2 or len(minute_text) != 2:
+        raise ValueError("time must use HH:MM format")
     if not 0 <= hour <= 23 or not 0 <= minute <= 59:
         raise ValueError("time must use HH:MM format")
     return f"{hour:02d}:{minute:02d}"
@@ -31,205 +31,163 @@ class ScheduleSchema(BaseModel):
     )
 
 
-class RecommendationRules(ScheduleSchema):
-    maximum_weekly_hours: int = Field(default=40, ge=1, le=168)
-    minimum_rest_minutes: int = Field(default=30, ge=0, le=1440)
-
-
-class RecommendationShiftInput(ScheduleSchema):
-    date: date
+class ShiftTemplateInput(ScheduleSchema):
+    name: str = Field(min_length=1, max_length=50)
     start: str
     end: str
     role: str = Field(default="", max_length=50)
-    required_staff: int = Field(default=1, ge=1, le=20)
+    sort_order: int = Field(default=0, ge=0, le=100)
+
+    @field_validator("name", "role")
+    @classmethod
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
 
     @field_validator("start", "end")
     @classmethod
     def validate_time(cls, value: str) -> str:
         return _valid_time(value)
 
-    @field_validator("role")
-    @classmethod
-    def normalize_role(cls, value: str) -> str:
-        return value.strip()
-
     @model_validator(mode="after")
-    def validate_range(self) -> "RecommendationShiftInput":
+    def validate_range(self) -> "ShiftTemplateInput":
+        if not self.name:
+            raise ValueError("name must not be blank")
         if self.end <= self.start:
             raise ValueError("end must be later than start")
         return self
 
 
-class RecommendationCreateRequest(ScheduleSchema):
-    start_date: date
-    end_date: date
-    recommendation_count: int = Field(default=3, ge=1, le=3)
-    shifts: list[RecommendationShiftInput] = Field(min_length=1, max_length=100)
-    rules: RecommendationRules = Field(default_factory=RecommendationRules)
+class ShiftTemplateCreateRequest(ShiftTemplateInput):
+    pass
+
+
+class ShiftTemplateUpdateRequest(ScheduleSchema):
+    name: str | None = Field(default=None, min_length=1, max_length=50)
+    start: str | None = None
+    end: str | None = None
+    role: str | None = Field(default=None, max_length=50)
+    sort_order: int | None = Field(default=None, ge=0, le=100)
+
+    @field_validator("name", "role")
+    @classmethod
+    def strip_text(cls, value: str | None) -> str | None:
+        return value.strip() if value is not None else None
+
+    @field_validator("start", "end")
+    @classmethod
+    def validate_time(cls, value: str | None) -> str | None:
+        return _valid_time(value) if value is not None else None
 
     @model_validator(mode="after")
-    def validate_period_and_shifts(self) -> "RecommendationCreateRequest":
-        if self.end_date < self.start_date:
-            raise ValueError("endDate must not be before startDate")
-        if (self.end_date - self.start_date).days > 30:
-            raise ValueError("schedule period must not exceed 31 days")
-        if any(
-            item.date < self.start_date or item.date > self.end_date
-            for item in self.shifts
-        ):
-            raise ValueError("every shift date must belong to the requested period")
-        keys = [(item.date, item.start, item.end, item.role) for item in self.shifts]
-        if len(keys) != len(set(keys)):
-            raise ValueError("shifts must not contain duplicates")
+    def require_change(self) -> "ShiftTemplateUpdateRequest":
+        if not self.model_fields_set:
+            raise ValueError("at least one field must be provided")
+        if self.name == "":
+            raise ValueError("name must not be blank")
         return self
+
+
+class ShiftTemplateResponse(ScheduleSchema):
+    template_id: UUID
+    name: str
+    start: str
+    end: str
+    role: str
+    sort_order: int
+
+
+class ShiftTemplateListResponse(ScheduleSchema):
+    templates: list[ShiftTemplateResponse]
+
+
+WorkerRole = Literal["owner", "staff"]
+
+
+class ScheduleWorkerResponse(ScheduleSchema):
+    user_id: UUID
+    member_id: UUID | None
+    name: str
+    role: WorkerRole
+
+
+class ScheduleWorkerListResponse(ScheduleSchema):
+    workers: list[ScheduleWorkerResponse]
+
+
+class ScheduleAssignmentInput(ScheduleSchema):
+    template_id: UUID
+    weekday: int = Field(ge=0, le=6)
+    assignee_user_id: UUID
+
+
+class ScheduleReplaceRequest(ScheduleSchema):
+    assignments: list[ScheduleAssignmentInput] = Field(max_length=200)
+
+    @field_validator("assignments")
+    @classmethod
+    def reject_duplicates(
+        cls, value: list[ScheduleAssignmentInput]
+    ) -> list[ScheduleAssignmentInput]:
+        keys = [
+            (item.template_id, item.weekday, item.assignee_user_id) for item in value
+        ]
+        if len(keys) != len(set(keys)):
+            raise ValueError("assignments must not contain duplicates")
+        return value
 
 
 class ScheduleAssignmentResponse(ScheduleSchema):
-    member_id: UUID
-    staff_name: str
-
-
-class RecommendationShiftResponse(ScheduleSchema):
-    shift_id: UUID
-    date: date
-    start: str
-    end: str
-    role: str
-    required_staff: int
-    assignments: list[ScheduleAssignmentResponse]
-
-
-class RecommendationSummaryResponse(ScheduleSchema):
-    recommendation_id: UUID
-    batch_id: UUID
-    candidate_no: int
-    start_date: date
-    end_date: date
-    unfilled_slots: int
-    created_at: datetime
-
-
-class RecommendationDetailResponse(RecommendationSummaryResponse):
-    rules: RecommendationRules
-    shifts: list[RecommendationShiftResponse]
-    warnings: list[str]
-
-
-class RecommendationCreateResponse(ScheduleSchema):
-    batch_id: UUID
-    recommendations: list[RecommendationDetailResponse]
-
-
-class RecommendationListResponse(ScheduleSchema):
-    recommendations: list[RecommendationSummaryResponse]
-
-
-class ScheduleCreateRequest(ScheduleSchema):
-    recommendation_id: UUID
-    name: str = Field(min_length=1, max_length=100)
-    publish: bool = False
-
-    @field_validator("name")
-    @classmethod
-    def normalize_name(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("name must not be blank")
-        return normalized
-
-
-class ScheduleShiftUpdate(ScheduleSchema):
-    date: date
-    start: str
-    end: str
-    role: str = Field(default="", max_length=50)
-    assigned_member_ids: list[UUID] = Field(default_factory=list, max_length=20)
-
-    @field_validator("start", "end")
-    @classmethod
-    def validate_time(cls, value: str) -> str:
-        return _valid_time(value)
-
-    @field_validator("role")
-    @classmethod
-    def normalize_role(cls, value: str) -> str:
-        return value.strip()
-
-    @field_validator("assigned_member_ids")
-    @classmethod
-    def validate_member_ids(cls, value: list[UUID]) -> list[UUID]:
-        if len(value) != len(set(value)):
-            raise ValueError("assignedMemberIds must not contain duplicates")
-        return value
-
-    @model_validator(mode="after")
-    def validate_range(self) -> "ScheduleShiftUpdate":
-        if self.end <= self.start:
-            raise ValueError("end must be later than start")
-        return self
-
-
-class ScheduleUpdateRequest(ScheduleSchema):
-    name: str | None = Field(default=None, min_length=1, max_length=100)
-    publish: bool | None = None
-    shifts: list[ScheduleShiftUpdate] | None = Field(default=None, max_length=100)
-
-    @field_validator("name")
-    @classmethod
-    def normalize_name(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("name must not be blank")
-        return normalized
-
-    @model_validator(mode="after")
-    def require_change(self) -> "ScheduleUpdateRequest":
-        if not self.model_fields_set:
-            raise ValueError("at least one field must be provided")
-        return self
-
-
-class ScheduleShiftResponse(ScheduleSchema):
-    shift_id: UUID
-    date: date
-    start: str
-    end: str
-    role: str
-    assignments: list[ScheduleAssignmentResponse]
+    assignment_id: UUID
+    template: ShiftTemplateResponse
+    weekday: int
+    assignee: ScheduleWorkerResponse
 
 
 class ScheduleResponse(ScheduleSchema):
-    schedule_id: UUID
-    recommendation_id: UUID | None
-    name: str
-    start_date: date
-    end_date: date
-    status: Literal["draft", "published"]
-    published_at: datetime | None
-    shifts: list[ScheduleShiftResponse]
-    created_at: datetime
-    updated_at: datetime
+    assignments: list[ScheduleAssignmentResponse]
 
 
-class ScheduleListResponse(ScheduleSchema):
-    schedules: list[ScheduleResponse]
-
-
-class MyScheduleShiftResponse(ScheduleSchema):
-    shift_id: UUID
+class CalendarShiftResponse(ScheduleSchema):
+    assignment_id: UUID
+    template_id: UUID
     date: date
+    name: str
     start: str
     end: str
     role: str
-    crew: list[str]
+    assignee: ScheduleWorkerResponse
+    substituted: bool
 
 
-class MyScheduleResponse(ScheduleSchema):
-    today: date
-    week_start: date
-    week_hours: float
-    weekly_allowance_hours: int = 15
-    week_note: str
-    shifts: list[MyScheduleShiftResponse]
+class ScheduleCalendarResponse(ScheduleSchema):
+    start_date: date
+    end_date: date
+    shifts: list[CalendarShiftResponse]
+
+
+class SubstituteRequestCreate(ScheduleSchema):
+    assignment_id: UUID
+    date: date
+    target_user_id: UUID
+
+
+SubstituteRequestStatus = Literal["PENDING", "ACCEPTED", "REJECTED", "CANCELLED"]
+
+
+class SubstituteRequestResponse(ScheduleSchema):
+    request_id: UUID
+    status: SubstituteRequestStatus
+    date: date
+    assignment_id: UUID
+    shift_name: str
+    start: str
+    end: str
+    requester: ScheduleWorkerResponse
+    target: ScheduleWorkerResponse
+    is_read: bool
+    created_at: datetime
+    responded_at: datetime | None
+
+
+class SubstituteRequestListResponse(ScheduleSchema):
+    requests: list[SubstituteRequestResponse]

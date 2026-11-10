@@ -1,7 +1,6 @@
 from fastapi import APIRouter
 
 from app.api.v1.assistant_chats import router as assistant_chats_router
-from app.api.v1.availabilities import router as availabilities_router
 from app.api.v1.business_verifications import (
     router as business_verifications_router,
 )
@@ -30,5 +29,4 @@ api_router.include_router(assistant_chats_router)
 api_router.include_router(owner_questions_router)
 api_router.include_router(handovers_router)
 api_router.include_router(payroll_router)
-api_router.include_router(availabilities_router)
 api_router.include_router(schedules_router)

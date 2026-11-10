@@ -139,6 +139,30 @@ async def test_create_store_assigns_authenticated_owner() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_store_saves_shift_templates() -> None:
+    owner_id = uuid4()
+    repository = FakeStoreRepository()
+    request = StoreCreateRequest(
+        name="우왕 카페",
+        address="서울특별시 강남구",
+        businessVerificationId=101,
+        shiftTemplates=[
+            {"name": "오픈", "start": "10:00", "end": "14:00"},
+            {"name": "마감", "start": "14:00", "end": "18:00"},
+        ],
+    )
+
+    store = await make_service(
+        repository,
+        [make_verification(owner_id)],
+    ).create(owner_id, request)
+
+    assert [item.name for item in store.shift_templates] == ["오픈", "마감"]
+    assert store.shift_templates[0].start_time.isoformat(timespec="minutes") == "10:00"
+    assert store.shift_templates[1].end_time.isoformat(timespec="minutes") == "18:00"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["INVALID", None])
 async def test_create_store_requires_verified_business(
     status: str | None,
