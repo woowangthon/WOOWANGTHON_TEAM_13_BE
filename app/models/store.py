@@ -43,6 +43,7 @@ class Store(Base):
     address: Mapped[str] = mapped_column(String(255), nullable=False)
     business_verification_id: Mapped[int | None] = mapped_column(
         BigInteger,
+        ForeignKey("business_verifications.id", ondelete="RESTRICT"),
         nullable=True,
     )
     photo_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)

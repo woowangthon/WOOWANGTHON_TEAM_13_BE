@@ -30,7 +30,7 @@ BusinessSize = Literal["UNDER_FIVE", "FIVE_OR_MORE"]
 class StoreCreateRequest(StoreSchema):
     name: str = Field(min_length=1, max_length=100)
     address: str = Field(min_length=1, max_length=255)
-    business_verification_id: int | None = Field(default=None, gt=0)
+    business_verification_id: int = Field(gt=0)
     photo_url: str | None = Field(default=None, max_length=2048)
     payday: int | None = None
     business_size: BusinessSize | None = None
@@ -94,6 +94,11 @@ class StoreUpdateRequest(StoreSchema):
         """수정할 필드가 하나 이상인지 검사합니다."""
         if not self.model_fields_set:
             raise ValueError("at least one field must be provided")
+        if (
+            "business_verification_id" in self.model_fields_set
+            and self.business_verification_id is None
+        ):
+            raise ValueError("business verification id must not be null")
         return self
 
 

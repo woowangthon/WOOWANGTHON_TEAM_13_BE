@@ -9,6 +9,7 @@ from app.core.auth import AuthenticatedUser, get_current_user
 from app.db.session import get_db
 from app.models.store import Store
 from app.models.user import User
+from app.repositories.business_verification import BusinessVerificationRepository
 from app.repositories.store import StoreRepository
 from app.schemas.store import (
     BusinessSize,
@@ -17,7 +18,11 @@ from app.schemas.store import (
     StoreResponse,
     StoreUpdateRequest,
 )
-from app.services.store import StoreNotFoundError, StoreService
+from app.services.store import (
+    BusinessVerificationRequiredError,
+    StoreNotFoundError,
+    StoreService,
+)
 from app.services.user import InactiveUserError, UserService
 
 router = APIRouter(prefix="/stores", tags=["stores"])
@@ -27,7 +32,10 @@ def get_store_service(
     session: Annotated[AsyncSession, Depends(get_db)],
 ) -> StoreService:
     """요청에 사용할 매장 서비스를 생성합니다."""
-    return StoreService(StoreRepository(session))
+    return StoreService(
+        StoreRepository(session),
+        BusinessVerificationRepository(session),
+    )
 
 
 async def _get_active_user(
@@ -82,7 +90,13 @@ async def create_store(
 ) -> StoreResponse:
     """현재 사용자가 소유할 매장을 등록합니다."""
     owner = await _get_active_user(user_service, identity)
-    store = await store_service.create(owner.id, request)
+    try:
+        store = await store_service.create(owner.id, request)
+    except BusinessVerificationRequiredError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A verified business registration is required",
+        ) from None
     return _to_response(store, owner.nickname)
 
 
@@ -129,6 +143,11 @@ async def update_store(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Store not found",
+        ) from None
+    except BusinessVerificationRequiredError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A verified business registration is required",
         ) from None
     return _to_response(store, owner.nickname)
 

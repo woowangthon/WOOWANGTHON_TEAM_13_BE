@@ -258,9 +258,18 @@ uvicorn app.app:app --reload
 | `PATCH` | `/api/v1/stores/{storeId}` | 매장 정보 수정 |
 | `DELETE` | `/api/v1/stores/{storeId}` | 매장 삭제 |
 
-사업자 인증 기능이 구현되기 전까지 `businessVerificationId`는 선택값이며,
-별도의 인증 완료 여부 검증은 수행하지 않습니다. 매장 대표 이미지는
-`photoUrl`로 등록하거나 수정할 수 있습니다.
+사업자등록정보 인증은 공공데이터포털의 국세청 진위확인 API를 사용합니다.
+`.env`의 `NTS_BUSINESS_API_KEY`에 발급받은 서비스 키를 설정합니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/v1/stores/business-verifications` | 사업자등록정보 진위확인 |
+| `GET` | `/api/v1/stores/business-verifications/{verificationId}` | 본인의 인증 결과 조회 |
+
+매장 등록에는 로그인한 사용자가 요청해 `VERIFIED` 결과를 받은
+`businessVerificationId`가 반드시 필요합니다. 다른 사용자의 인증 결과나
+`INVALID` 결과로는 매장을 등록하거나 인증 정보를 변경할 수 없습니다.
+매장 대표 이미지는 `photoUrl`로 등록하거나 수정할 수 있습니다.
 
 ## 매뉴얼 API
 
