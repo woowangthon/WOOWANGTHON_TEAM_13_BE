@@ -2,6 +2,7 @@
 
 from app.models.assistant_chat import AssistantChat, AssistantMessage
 from app.models.availability import Availability, AvailabilityDay
+from app.models.business_verification import BusinessVerification
 from app.models.handover import HandoverItem, HandoverNote
 from app.models.invitation import Invitation, InvitationAttempt
 from app.models.manual import Manual, ManualCategory
@@ -24,6 +25,7 @@ __all__ = [
     "AssistantMessage",
     "Availability",
     "AvailabilityDay",
+    "BusinessVerification",
     "HandoverItem",
     "HandoverNote",
     "Invitation",
