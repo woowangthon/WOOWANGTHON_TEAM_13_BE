@@ -22,7 +22,7 @@ class Store(Base):
     __tablename__ = "stores"
     __table_args__ = (
         CheckConstraint(
-            "payday IS NULL OR payday BETWEEN 1 AND 28 OR payday = 31",
+            "payday IS NULL OR payday BETWEEN 1 AND 31",
             name="ck_stores_payday",
         ),
         CheckConstraint(

@@ -229,15 +229,29 @@ def test_update_store() -> None:
     assert response.json()["businessSize"] == "UNDER_FIVE"
 
 
-def test_store_rejects_invalid_payday() -> None:
+def test_store_accepts_payday_between_1_and_31() -> None:
     client, _, store_service = create_client()
 
-    response = client.patch(
-        f"/api/v1/stores/{store_service.store.id}",
-        json={"payday": 30},
-    )
+    for payday in (1, 28, 29, 30, 31):
+        response = client.patch(
+            f"/api/v1/stores/{store_service.store.id}",
+            json={"payday": payday},
+        )
 
-    assert response.status_code == 422
+        assert response.status_code == 200
+        assert response.json()["payday"] == payday
+
+
+def test_store_rejects_payday_outside_1_and_31() -> None:
+    client, _, store_service = create_client()
+
+    for payday in (0, 32):
+        response = client.patch(
+            f"/api/v1/stores/{store_service.store.id}",
+            json={"payday": payday},
+        )
+
+        assert response.status_code == 422
 
 
 def test_store_rejects_invalid_business_size() -> None:

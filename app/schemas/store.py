@@ -5,8 +5,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 def _validate_payday(value: int | None) -> int | None:
-    if value is not None and not (1 <= value <= 28 or value == 31):
-        raise ValueError("payday must be between 1 and 28, or 31")
+    if value is not None and not 1 <= value <= 31:
+        raise ValueError("payday must be between 1 and 31")
     return value
 
 
