@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from app.models.assistant_chat import AssistantChat, AssistantMessage
+from app.models.manual import Manual, ManualCategory
 from app.models.membership import Membership
 from app.models.owner_question import OwnerQuestion
 from app.models.store import Store
@@ -39,8 +40,14 @@ class SyncSessionAdapter:
     async def get(self, model: Any, key: Any) -> Any:
         return self._session.get(model, key)
 
+    def add(self, item: Any) -> None:
+        self._session.add(item)
+
     def add_all(self, items: list[Any]) -> None:
         self._session.add_all(items)
+
+    async def flush(self) -> None:
+        self._session.flush()
 
     async def commit(self) -> None:
         self._session.commit()
@@ -62,6 +69,8 @@ def session() -> Iterator[Session]:
         AssistantChat.__table__,
         AssistantMessage.__table__,
         OwnerQuestion.__table__,
+        ManualCategory.__table__,
+        Manual.__table__,
     ]
     User.metadata.create_all(engine, tables=tables)
     with Session(engine, expire_on_commit=False) as db_session:
@@ -314,6 +323,57 @@ async def test_save_answer_updates_only_unanswered_question(
     assert question.answered_by == owner_id
     assert session.get(AssistantMessage, first.id) is not None
     assert session.get(AssistantMessage, second.id) is None
+
+
+async def test_save_answer_with_manual_commits_together(session: Session) -> None:
+    store_id = add_store(session)
+    staff_id = add_user(session, "민지")
+    owner_id = add_user(session, "사장님")
+    chat = add_chat(session, store_id, staff_id)
+    question = add_question(
+        session,
+        chat,
+        add_message(session, chat, "ai", "a", 1),
+        staff_id,
+    )
+    session.commit()
+    repository = OwnerQuestionRepository(as_async(session))
+
+    def answer_parts(text: str) -> tuple[AssistantMessage, ManualCategory, Manual]:
+        category = ManualCategory(id=uuid4(), store_id=store_id, name="물건 위치")
+        manual = Manual(
+            id=uuid4(),
+            store_id=store_id,
+            category_id=category.id,
+            title="우산",
+            body=text,
+        )
+        message = AssistantMessage(
+            id=uuid4(),
+            chat_id=chat.id,
+            sender="owner",
+            text=text,
+            sources=[],
+            created_at=NOW + timedelta(seconds=9),
+        )
+        return message, category, manual
+
+    first, first_category, first_manual = answer_parts("카운터 아래")
+    second, second_category, second_manual = answer_parts("두 번째")
+    answered_at = NOW + timedelta(seconds=9)
+
+    assert await repository.save_answer(
+        question, owner_id, answered_at, first, chat, first_manual, first_category
+    )
+    assert not await repository.save_answer(
+        question, owner_id, answered_at, second, chat, second_manual, second_category
+    )
+    saved = session.get(Manual, first_manual.id)
+    assert saved is not None
+    assert saved.category_id == first_category.id
+    assert session.get(ManualCategory, first_category.id) is not None
+    assert session.get(Manual, second_manual.id) is None
+    assert session.get(ManualCategory, second_category.id) is None
 
 
 async def test_previous_staff_message_is_the_question_before_answer(

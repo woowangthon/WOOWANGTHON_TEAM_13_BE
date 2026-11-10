@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.models.assistant_chat import AssistantChat, AssistantMessage
+from app.models.manual import Manual, ManualCategory
 from app.models.owner_question import (
     OWNER_QUESTION_ANSWERED,
     OWNER_QUESTION_ASKED,
@@ -14,10 +15,12 @@ from app.services.assistant_chat import (
     AssistantChatNotFoundError,
     AssistantMessageNotFoundError,
 )
+from app.services.manual import ManualCategoryNotFoundError
 from app.services.store_access import StoreAccessProtocol
 
 ASKED_SYSTEM_TEXT = "사장님께 전달했어요"
 TITLE_MAX_LENGTH = 30
+DEFAULT_MANUAL_CATEGORY = "물건 위치"
 
 
 class OwnerQuestionNotAllowedError(Exception):
@@ -36,16 +39,36 @@ class OwnerQuestionAlreadyAnsweredError(Exception):
     """이미 답변한 질문에 다시 답하려 할 때 발생합니다."""
 
 
-class AddToManualNotSupportedError(Exception):
-    """아직 지원하지 않는 매뉴얼 추가를 요청했을 때 발생합니다."""
-
-
 @dataclass(frozen=True, slots=True)
 class OwnerQuestionView:
-    """질문과 질문한 직원 이름입니다."""
+    """질문과 질문한 직원 이름, 답변으로 만든 매뉴얼 ID입니다."""
 
     question: OwnerQuestion
     staff_name: str
+    manual_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ManualDraft:
+    """답변을 매뉴얼로 저장할 때 사장님이 고친 제목, 본문, 카테고리입니다."""
+
+    title: str | None = None
+    body: str | None = None
+    category_id: UUID | None = None
+
+
+class ManualCategoryLookupProtocol(Protocol):
+    async def get_category(
+        self,
+        category_id: UUID,
+        store_id: UUID,
+    ) -> ManualCategory | None: ...
+
+    async def get_category_by_name(
+        self,
+        store_id: UUID,
+        name: str,
+    ) -> ManualCategory | None: ...
 
 
 class ChatLookupProtocol(Protocol):
@@ -102,6 +125,8 @@ class OwnerQuestionRepositoryProtocol(Protocol):
         answered_at: datetime,
         owner_message: AssistantMessage,
         chat: AssistantChat,
+        manual: Manual | None = None,
+        category: ManualCategory | None = None,
     ) -> bool: ...
 
 
@@ -111,6 +136,11 @@ def question_title(question: str) -> str:
     if len(text) <= TITLE_MAX_LENGTH:
         return text
     return text[:TITLE_MAX_LENGTH].rstrip() + "…"
+
+
+def manual_body(question: str, answer: str) -> str:
+    """질문과 답변을 AI가 근거로 쓰기 좋은 매뉴얼 본문으로 만듭니다."""
+    return f"질문: {question}\n답변: {answer}"
 
 
 def _after(previous: datetime) -> datetime:
@@ -125,11 +155,13 @@ class OwnerQuestionService:
         chats: ChatLookupProtocol,
         repository: OwnerQuestionRepositoryProtocol,
         store_access: StoreAccessProtocol,
+        categories: ManualCategoryLookupProtocol,
     ) -> None:
         """사장님께 물어보기에 필요한 저장소와 권한 확인을 받습니다."""
         self._chats = chats
         self._repository = repository
         self._store_access = store_access
+        self._categories = categories
 
     async def questions_for_messages(
         self,
@@ -203,12 +235,10 @@ class OwnerQuestionService:
         question_id: UUID,
         user_id: UUID,
         text: str,
-        add_to_manual: bool,
+        manual_draft: ManualDraft | None = None,
     ) -> OwnerQuestionView:
-        """사장님 답변을 저장하고 알바생 채팅에 전달합니다."""
+        """사장님 답변을 저장하고, 요청하면 같은 트랜잭션에서 매뉴얼로 만듭니다."""
         await self._store_access.ensure_owner(store_id, user_id)
-        if add_to_manual:
-            raise AddToManualNotSupportedError
         row = await self._repository.get_by_id_and_store_id(question_id, store_id)
         if row is None:
             raise OwnerQuestionNotFoundError
@@ -227,6 +257,15 @@ class OwnerQuestionService:
             sources=[],
             created_at=answered_at,
         )
+        manual: Manual | None = None
+        category: ManualCategory | None = None
+        if manual_draft is not None:
+            manual, category = await self._build_manual(
+                store_id,
+                question.question,
+                text,
+                manual_draft,
+            )
         chat.last_message_at = answered_at
         chat.last_message_text = text
         saved = await self._repository.save_answer(
@@ -235,7 +274,47 @@ class OwnerQuestionService:
             answered_at,
             owner_message,
             chat,
+            manual,
+            category,
         )
         if not saved:
             raise OwnerQuestionAlreadyAnsweredError
-        return OwnerQuestionView(question, staff_name)
+        manual_id = manual.id if manual is not None else None
+        return OwnerQuestionView(question, staff_name, manual_id)
+
+    async def _build_manual(
+        self,
+        store_id: UUID,
+        question: str,
+        answer: str,
+        draft: ManualDraft,
+    ) -> tuple[Manual, ManualCategory | None]:
+        """답변으로 저장할 매뉴얼과 새로 만들 기본 카테고리를 준비합니다."""
+        new_category: ManualCategory | None = None
+        if draft.category_id is not None:
+            found = await self._categories.get_category(draft.category_id, store_id)
+            if found is None:
+                raise ManualCategoryNotFoundError
+            category_id = found.id
+        else:
+            found = await self._categories.get_category_by_name(
+                store_id,
+                DEFAULT_MANUAL_CATEGORY,
+            )
+            if found is None:
+                new_category = ManualCategory(
+                    id=uuid4(),
+                    store_id=store_id,
+                    name=DEFAULT_MANUAL_CATEGORY,
+                )
+                found = new_category
+            category_id = found.id
+        manual = Manual(
+            id=uuid4(),
+            store_id=store_id,
+            category_id=category_id,
+            icon=None,
+            title=draft.title or question_title(question),
+            body=draft.body or manual_body(question, answer),
+        )
+        return manual, new_category
