@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -12,7 +13,14 @@ from app.core.auth import AuthenticatedUser, get_current_user
 from app.models.recipe import Recipe
 from app.models.user import User
 from app.schemas.recipe import RecipeCreateRequest, RecipeUpdateRequest
-from app.services.recipe import RecipeNotFoundError
+from app.services.recipe import (
+    ImageSlot,
+    RecipeImage,
+    RecipeImageStorageError,
+    RecipeImageTooLargeError,
+    RecipeImageTypeError,
+    RecipeNotFoundError,
+)
 from app.services.store import StoreNotFoundError
 from app.services.store_access import StoreAccessForbiddenError
 
@@ -56,6 +64,8 @@ class StubRecipeService:
         )
         self.error: Exception | None = None
         self.deleted = False
+        self.seen_images: dict[ImageSlot, RecipeImage] = {}
+        self.removed_slot: ImageSlot | None = None
 
     def _raise_if_needed(self) -> None:
         if self.error is not None:
@@ -66,10 +76,51 @@ class StubRecipeService:
         store_id: UUID,
         user_id: UUID,
         request: RecipeCreateRequest,
+        images: Mapping[ImageSlot, RecipeImage] | None = None,
     ) -> Recipe:
         self._raise_if_needed()
         self.recipe.name = request.name
+        self.seen_images = dict(images or {})
+        if "menu" in self.seen_images:
+            self.recipe.image_path = "menu.jpg"
+        if "recipe" in self.seen_images:
+            self.recipe.recipe_image_path = "recipe.png"
         return self.recipe
+
+    async def set_image(
+        self,
+        store_id: UUID,
+        recipe_id: UUID,
+        user_id: UUID,
+        slot: ImageSlot,
+        image: RecipeImage,
+    ) -> Recipe:
+        self._raise_if_needed()
+        self.seen_images = {slot: image}
+        if slot == "menu":
+            self.recipe.image_path = "new-menu.webp"
+        else:
+            self.recipe.recipe_image_path = "new-recipe.webp"
+        return self.recipe
+
+    async def remove_image(
+        self,
+        store_id: UUID,
+        recipe_id: UUID,
+        user_id: UUID,
+        slot: ImageSlot,
+    ) -> Recipe:
+        self._raise_if_needed()
+        self.removed_slot = slot
+        return self.recipe
+
+    async def image_urls(self, recipes: list[Recipe]) -> dict[str, str]:
+        return {
+            path: f"https://signed/{path}"
+            for recipe in recipes
+            for path in (recipe.image_path, recipe.recipe_image_path)
+            if path
+        }
 
     async def list_for_store(self, store_id: UUID, user_id: UUID) -> list[Recipe]:
         self._raise_if_needed()
@@ -135,11 +186,15 @@ def test_create_recipe_from_multipart_json_part() -> None:
         "temp",
         "size",
         "ingredients",
+        "imageUrl",
+        "recipeImageUrl",
         "steps",
         "memo",
         "isNew",
         "updatedAt",
     }
+    assert response.json()["imageUrl"] is None
+    assert response.json()["recipeImageUrl"] is None
 
 
 def test_create_recipe_rejects_invalid_values() -> None:
@@ -157,16 +212,93 @@ def test_create_recipe_rejects_invalid_values() -> None:
         assert response.status_code == 422
 
 
-def test_create_recipe_with_images_is_not_silently_dropped() -> None:
-    client, _ = make_client()
+def test_create_recipe_with_menu_and_recipe_images() -> None:
+    client, service = make_client()
 
     response = client.post(
         recipes_url(),
         data={"recipe": json.dumps(VALID_RECIPE)},
-        files=[("images", ("a.jpg", b"data", "image/jpeg"))],
+        files=[
+            ("image", ("menu.jpg", b"menu-bytes", "image/jpeg")),
+            ("recipeImage", ("recipe.png", b"recipe-bytes", "image/png")),
+        ],
     )
 
-    assert response.status_code == 501
+    assert response.status_code == 201
+    assert service.seen_images == {
+        "menu": RecipeImage(b"menu-bytes"),
+        "recipe": RecipeImage(b"recipe-bytes"),
+    }
+    assert response.json()["imageUrl"] == "https://signed/menu.jpg"
+    assert response.json()["recipeImageUrl"] == "https://signed/recipe.png"
+
+
+def test_image_errors_use_code_and_message() -> None:
+    client, service = make_client()
+    data = {"recipe": json.dumps(VALID_RECIPE)}
+    files = [("image", ("menu.jpg", b"x", "image/jpeg"))]
+    cases = [
+        (RecipeImageTooLargeError(), 413, "IMAGE_TOO_LARGE"),
+        (RecipeImageTypeError(), 415, "UNSUPPORTED_IMAGE_TYPE"),
+        (RecipeImageStorageError(), 503, "STORAGE_UNAVAILABLE"),
+    ]
+
+    for error, status_code, code in cases:
+        service.error = error
+        created = client.post(recipes_url(), data=data, files=files)
+        replaced = client.put(
+            recipes_url(f"/{service.recipe.id}/images/menu"),
+            files=files,
+        )
+        for response in (created, replaced):
+            assert response.status_code == status_code
+            assert response.json()["code"] == code
+            assert response.json()["message"]
+
+
+def test_put_recipe_image_replaces_slot() -> None:
+    client, service = make_client()
+
+    response = client.put(
+        recipes_url(f"/{service.recipe.id}/images/recipe"),
+        files=[("image", ("r.webp", b"webp-bytes", "image/webp"))],
+    )
+
+    assert response.status_code == 200
+    assert service.seen_images == {"recipe": RecipeImage(b"webp-bytes")}
+    assert response.json()["recipeImageUrl"] == "https://signed/new-recipe.webp"
+    assert response.json()["steps"] == ["우유를 천천히 부어요"]
+
+
+def test_delete_recipe_image() -> None:
+    client, service = make_client()
+
+    response = client.delete(recipes_url(f"/{service.recipe.id}/images/menu"))
+
+    assert response.status_code == 204
+    assert service.removed_slot == "menu"
+
+
+def test_unknown_image_slot_is_rejected() -> None:
+    client, service = make_client()
+    url = recipes_url(f"/{service.recipe.id}/images/thumbnail")
+
+    assert client.delete(url).status_code == 422
+    assert (
+        client.put(url, files=[("image", ("a.jpg", b"x", "image/jpeg"))]).status_code
+        == 422
+    )
+
+
+def test_list_includes_signed_image_urls() -> None:
+    client, service = make_client()
+    service.recipe.image_path = "menu.jpg"
+
+    response = client.get(recipes_url())
+
+    summary = response.json()["recipes"][0]
+    assert summary["imageUrl"] == "https://signed/menu.jpg"
+    assert summary["recipeImageUrl"] is None
 
 
 def test_list_recipes_returns_categories_and_summaries() -> None:

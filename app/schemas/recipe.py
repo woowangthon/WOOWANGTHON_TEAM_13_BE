@@ -149,6 +149,8 @@ class RecipeSummaryResponse(RecipeSchema):
     temp: str | None
     size: str | None
     ingredients: list[RecipeIngredient]
+    image_url: str | None
+    recipe_image_url: str | None
     is_new: bool
     updated_at: datetime
 

@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     database_url: str
 
     supabase_url: str
+    supabase_secret_key: str = ""
+    supabase_storage_bucket: str = "content-files"
     supabase_jwt_issuer: str
     supabase_jwt_audience: str = "authenticated"
     supabase_jwks_url: str
