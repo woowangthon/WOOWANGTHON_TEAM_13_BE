@@ -303,10 +303,26 @@ uvicorn app.app:app --reload
 | `GET` | `/api/v1/stores/{storeId}/recipes/{recipeId}` | 레시피 상세 조회 |
 | `PATCH` | `/api/v1/stores/{storeId}/recipes/{recipeId}` | 레시피 수정 |
 | `DELETE` | `/api/v1/stores/{storeId}/recipes/{recipeId}` | 레시피 삭제 |
+| `PUT` | `/api/v1/stores/{storeId}/recipes/{recipeId}/images/{slot}` | 레시피 사진 바꾸기 |
+| `DELETE` | `/api/v1/stores/{storeId}/recipes/{recipeId}/images/{slot}` | 레시피 사진 빼기 |
 | `POST` | `/api/v1/stores/{storeId}/recipe-scans` | 사진으로 레시피 초안 생성 |
 
-레시피 등록은 `multipart/form-data`이며 `recipe` 파트에 JSON을 담습니다. 파일
-저장소가 정해지기 전까지 `images` 파트를 보내면 `501`을 반환합니다.
+레시피 등록은 `multipart/form-data`이며 `recipe` 파트에 JSON을 담습니다. 사진은
+선택이며 `image` 파트에 메뉴 사진, `recipeImage` 파트에 레시피 사진을 담습니다.
+
+레시피 사진은 메뉴 사진(`slot`=`menu`)과 레시피 사진(`slot`=`recipe`) 두 장입니다.
+글 수정(`PATCH`)과 별도로, 사진은 `PUT .../images/{slot}`(`image` 파트)로 바꾸고
+`DELETE .../images/{slot}`로 뺍니다. 사진은 Supabase Storage의 비공개 버킷
+(`SUPABASE_STORAGE_BUCKET`)에 서버 키(`SUPABASE_SECRET_KEY`)로 저장합니다. 조회 응답의
+`imageUrl`(메뉴 사진)과 `recipeImageUrl`(레시피 사진)은 6시간 동안 쓸 수 있는 주소이며,
+사진이 없으면 `null`입니다. 주소 발급에 실패하면 레시피는 그대로 반환하고 사진 주소만
+`null`로 둡니다.
+
+| 사진 오류 | 응답 |
+| --- | --- |
+| 비어 있거나 10MB 초과 | `413 IMAGE_TOO_LARGE` |
+| JPEG, PNG, WebP가 아님 (파일 내용으로 판별) | `415 UNSUPPORTED_IMAGE_TYPE` |
+| 저장소 오류 | `503 STORAGE_UNAVAILABLE` |
 
 레시피 스캔은 사장님만 사용할 수 있고 `multipart/form-data`의 `image` 파트로 사진을
 보냅니다. JPEG, PNG, WebP, HEIC, HEIF를 10MB까지 받습니다. 사진과 초안은 저장하지

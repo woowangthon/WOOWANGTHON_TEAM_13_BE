@@ -1,19 +1,40 @@
+from collections.abc import Sequence
 from uuid import UUID, uuid4
 
 import pytest
 
+from app.integrations.storage import StorageError
 from app.models.recipe import Recipe
 from app.schemas.recipe import RecipeCreateRequest, RecipeUpdateRequest
-from app.services.recipe import RecipeNotFoundError, RecipeService, count_categories
+from app.services.recipe import (
+    MAX_IMAGE_BYTES,
+    SIGNED_URL_SECONDS,
+    RecipeImage,
+    RecipeImageStorageError,
+    RecipeImageTooLargeError,
+    RecipeImageTypeError,
+    RecipeNotFoundError,
+    RecipeService,
+    count_categories,
+    detect_image_type,
+)
 from app.services.store import StoreNotFoundError
+
+JPEG = bytes.fromhex("ffd8ffe000104a464946") + b"jpeg-body"
+PNG = bytes.fromhex("89504e470d0a1a0a") + b"png-body"
+WEBP = b"RIFF" + bytes(4) + b"WEBPVP8 " + b"webp-body"
 
 
 class FakeRecipeRepository:
     def __init__(self) -> None:
         self.recipes: list[Recipe] = []
+        self.fail_on_create = False
 
     async def create(self, recipe: Recipe) -> Recipe:
-        recipe.id = uuid4()
+        if self.fail_on_create:
+            raise RuntimeError("db down")
+        if recipe.id is None:
+            recipe.id = uuid4()
         self.recipes.append(recipe)
         return recipe
 
@@ -51,6 +72,38 @@ class FakeStoreAccess:
         await self.ensure_owner(store_id, user_id)
 
 
+class FakeStorage:
+    def __init__(self) -> None:
+        self.files: dict[str, tuple[bytes, str]] = {}
+        self.deleted: list[str] = []
+        self.signed_with: list[tuple[list[str], int]] = []
+        self.fail_upload = False
+        self.fail_sign = False
+        self.fail_delete = False
+
+    async def upload(self, path: str, data: bytes, content_type: str) -> None:
+        if self.fail_upload:
+            raise StorageError("upload failed")
+        self.files[path] = (data, content_type)
+
+    async def delete(self, paths: Sequence[str]) -> None:
+        if self.fail_delete:
+            raise StorageError("delete failed")
+        for path in paths:
+            self.files.pop(path, None)
+            self.deleted.append(path)
+
+    async def signed_urls(
+        self,
+        paths: Sequence[str],
+        expires_in_seconds: int,
+    ) -> dict[str, str]:
+        if self.fail_sign:
+            raise StorageError("sign failed")
+        self.signed_with.append((list(paths), expires_in_seconds))
+        return {path: f"https://signed/{path}" for path in paths}
+
+
 STORE_ID = uuid4()
 OWNER_ID = uuid4()
 
@@ -61,8 +114,13 @@ def repository() -> FakeRecipeRepository:
 
 
 @pytest.fixture
-def service(repository: FakeRecipeRepository) -> RecipeService:
-    return RecipeService(repository, FakeStoreAccess())
+def storage() -> FakeStorage:
+    return FakeStorage()
+
+
+@pytest.fixture
+def service(repository: FakeRecipeRepository, storage: FakeStorage) -> RecipeService:
+    return RecipeService(repository, FakeStoreAccess(), storage)
 
 
 def recipe_request(**overrides: object) -> RecipeCreateRequest:
@@ -152,3 +210,223 @@ def test_count_categories_keeps_first_seen_order() -> None:
     ]
 
     assert list(count_categories(recipes).items()) == [("라떼", 2), ("커피", 1)]
+
+
+def test_detect_image_type_uses_file_signature() -> None:
+    assert detect_image_type(JPEG) == ("image/jpeg", "jpg")
+    assert detect_image_type(PNG) == ("image/png", "png")
+    assert detect_image_type(WEBP) == ("image/webp", "webp")
+    with pytest.raises(RecipeImageTypeError):
+        detect_image_type(b"GIF89a-not-allowed")
+
+
+async def test_create_uploads_both_images(
+    service: RecipeService,
+    storage: FakeStorage,
+) -> None:
+    created = await service.create(
+        STORE_ID,
+        OWNER_ID,
+        recipe_request(),
+        {"menu": RecipeImage(JPEG), "recipe": RecipeImage(PNG)},
+    )
+
+    assert created.image_path is not None
+    assert created.recipe_image_path is not None
+    prefix = f"stores/{STORE_ID}/recipes/{created.id}/"
+    assert created.image_path.startswith(prefix + "menu-")
+    assert created.image_path.endswith(".jpg")
+    assert created.recipe_image_path.startswith(prefix + "recipe-")
+    assert created.recipe_image_path.endswith(".png")
+    assert storage.files[created.image_path] == (JPEG, "image/jpeg")
+    assert storage.files[created.recipe_image_path] == (PNG, "image/png")
+
+
+async def test_create_without_images_has_no_paths(
+    service: RecipeService,
+    storage: FakeStorage,
+) -> None:
+    created = await service.create(STORE_ID, OWNER_ID, recipe_request())
+
+    assert created.image_path is None
+    assert created.recipe_image_path is None
+    assert storage.files == {}
+
+
+async def test_create_rejects_bad_image_before_saving(
+    service: RecipeService,
+    repository: FakeRecipeRepository,
+    storage: FakeStorage,
+) -> None:
+    with pytest.raises(RecipeImageTypeError):
+        await service.create(
+            STORE_ID,
+            OWNER_ID,
+            recipe_request(),
+            {"menu": RecipeImage(JPEG), "recipe": RecipeImage(b"%PDF-1.7")},
+        )
+    with pytest.raises(RecipeImageTooLargeError):
+        await service.create(
+            STORE_ID,
+            OWNER_ID,
+            recipe_request(),
+            {"menu": RecipeImage(JPEG + bytes(MAX_IMAGE_BYTES))},
+        )
+    with pytest.raises(RecipeImageTooLargeError):
+        await service.create(
+            STORE_ID, OWNER_ID, recipe_request(), {"menu": RecipeImage(b"")}
+        )
+
+    assert repository.recipes == []
+    assert storage.files == {}
+
+
+async def test_create_cleans_up_uploads_when_db_fails(
+    service: RecipeService,
+    repository: FakeRecipeRepository,
+    storage: FakeStorage,
+) -> None:
+    repository.fail_on_create = True
+
+    with pytest.raises(RuntimeError):
+        await service.create(
+            STORE_ID, OWNER_ID, recipe_request(), {"menu": RecipeImage(JPEG)}
+        )
+
+    assert storage.files == {}
+    assert len(storage.deleted) == 1
+
+
+async def test_create_reports_storage_failure_and_saves_nothing(
+    service: RecipeService,
+    repository: FakeRecipeRepository,
+    storage: FakeStorage,
+) -> None:
+    storage.fail_upload = True
+
+    with pytest.raises(RecipeImageStorageError):
+        await service.create(
+            STORE_ID, OWNER_ID, recipe_request(), {"menu": RecipeImage(JPEG)}
+        )
+
+    assert repository.recipes == []
+
+
+async def test_stranger_cannot_upload(
+    service: RecipeService,
+    storage: FakeStorage,
+) -> None:
+    created = await service.create(STORE_ID, OWNER_ID, recipe_request())
+
+    with pytest.raises(StoreNotFoundError):
+        await service.set_image(
+            STORE_ID, created.id, uuid4(), "menu", RecipeImage(JPEG)
+        )
+    assert storage.files == {}
+
+
+async def test_set_image_replaces_and_deletes_previous(
+    service: RecipeService,
+    storage: FakeStorage,
+) -> None:
+    created = await service.create(
+        STORE_ID, OWNER_ID, recipe_request(), {"menu": RecipeImage(JPEG)}
+    )
+    previous = created.image_path
+
+    updated = await service.set_image(
+        STORE_ID, created.id, OWNER_ID, "menu", RecipeImage(WEBP)
+    )
+
+    assert updated.image_path != previous
+    assert updated.image_path is not None
+    assert updated.image_path.endswith(".webp")
+    assert previous in storage.deleted
+    assert list(storage.files) == [updated.image_path]
+
+
+async def test_set_image_on_missing_recipe_uploads_nothing(
+    service: RecipeService,
+    storage: FakeStorage,
+) -> None:
+    with pytest.raises(RecipeNotFoundError):
+        await service.set_image(
+            STORE_ID, uuid4(), OWNER_ID, "recipe", RecipeImage(JPEG)
+        )
+    assert storage.files == {}
+
+
+async def test_remove_image_clears_only_that_slot(
+    service: RecipeService,
+    storage: FakeStorage,
+) -> None:
+    created = await service.create(
+        STORE_ID,
+        OWNER_ID,
+        recipe_request(),
+        {"menu": RecipeImage(JPEG), "recipe": RecipeImage(PNG)},
+    )
+    menu_path = created.image_path
+
+    updated = await service.remove_image(STORE_ID, created.id, OWNER_ID, "recipe")
+
+    assert updated.recipe_image_path is None
+    assert updated.image_path == menu_path
+    assert list(storage.files) == [menu_path]
+
+
+async def test_remove_image_succeeds_even_if_file_delete_fails(
+    service: RecipeService,
+    storage: FakeStorage,
+) -> None:
+    created = await service.create(
+        STORE_ID, OWNER_ID, recipe_request(), {"menu": RecipeImage(JPEG)}
+    )
+    storage.fail_delete = True
+
+    updated = await service.remove_image(STORE_ID, created.id, OWNER_ID, "menu")
+
+    assert updated.image_path is None
+
+
+async def test_image_urls_signs_all_paths_in_one_call(
+    service: RecipeService,
+    storage: FakeStorage,
+) -> None:
+    first = await service.create(
+        STORE_ID, OWNER_ID, recipe_request(), {"menu": RecipeImage(JPEG)}
+    )
+    second = await service.create(
+        STORE_ID, OWNER_ID, recipe_request(), {"recipe": RecipeImage(PNG)}
+    )
+    plain = await service.create(STORE_ID, OWNER_ID, recipe_request())
+
+    urls = await service.image_urls([first, second, plain])
+
+    assert len(storage.signed_with) == 1
+    paths, seconds = storage.signed_with[0]
+    assert paths == [first.image_path, second.recipe_image_path]
+    assert seconds == SIGNED_URL_SECONDS
+    assert urls[str(first.image_path)].startswith("https://signed/")
+
+
+async def test_image_urls_without_images_skips_storage(
+    service: RecipeService,
+    storage: FakeStorage,
+) -> None:
+    plain = await service.create(STORE_ID, OWNER_ID, recipe_request())
+
+    assert await service.image_urls([plain]) == {}
+    assert storage.signed_with == []
+
+
+async def test_image_urls_returns_empty_when_storage_fails(
+    service: RecipeService,
+    storage: FakeStorage,
+) -> None:
+    created = await service.create(
+        STORE_ID, OWNER_ID, recipe_request(), {"menu": RecipeImage(JPEG)}
+    )
+    storage.fail_sign = True
+
+    assert await service.image_urls([created]) == {}

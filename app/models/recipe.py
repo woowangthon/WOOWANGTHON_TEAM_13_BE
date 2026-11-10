@@ -28,6 +28,11 @@ class Recipe(Base):
     ingredients: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
     steps: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_path: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    recipe_image_path: Mapped[str | None] = mapped_column(
+        String(300),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
