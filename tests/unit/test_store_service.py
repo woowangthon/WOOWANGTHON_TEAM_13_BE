@@ -1,11 +1,16 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
 import pytest
 
+from app.models.business_verification import BusinessVerification
 from app.models.store import Store
 from app.schemas.store import StoreCreateRequest, StoreUpdateRequest
-from app.services.store import StoreNotFoundError, StoreService
+from app.services.store import (
+    BusinessVerificationRequiredError,
+    StoreNotFoundError,
+    StoreService,
+)
 
 
 class FakeStoreRepository:
@@ -44,6 +49,29 @@ class FakeStoreRepository:
         return store
 
 
+class FakeBusinessVerificationRepository:
+    def __init__(
+        self,
+        verifications: list[BusinessVerification] | None = None,
+    ) -> None:
+        self.verifications = verifications or []
+
+    async def get_by_id_and_requester_id(
+        self,
+        verification_id: int,
+        requester_id: UUID,
+    ) -> BusinessVerification | None:
+        return next(
+            (
+                verification
+                for verification in self.verifications
+                if verification.id == verification_id
+                and verification.requester_id == requester_id
+            ),
+            None,
+        )
+
+
 def make_store(owner_id: UUID, **overrides: object) -> Store:
     values: dict[str, object] = {
         "id": uuid4(),
@@ -59,6 +87,33 @@ def make_store(owner_id: UUID, **overrides: object) -> Store:
     return Store(**values)
 
 
+def make_verification(
+    requester_id: UUID,
+    *,
+    verification_id: int = 101,
+    status: str = "VERIFIED",
+) -> BusinessVerification:
+    return BusinessVerification(
+        id=verification_id,
+        requester_id=requester_id,
+        business_registration_number="1234567890",
+        owner_name="홍길동",
+        business_start_date=date(2026, 1, 15),
+        status=status,
+        provider_message="확인 결과",
+    )
+
+
+def make_service(
+    repository: FakeStoreRepository,
+    verifications: list[BusinessVerification] | None = None,
+) -> StoreService:
+    return StoreService(
+        repository,
+        FakeBusinessVerificationRepository(verifications),
+    )
+
+
 @pytest.mark.asyncio
 async def test_create_store_assigns_authenticated_owner() -> None:
     owner_id = uuid4()
@@ -71,7 +126,10 @@ async def test_create_store_assigns_authenticated_owner() -> None:
         businessSize="FIVE_OR_MORE",
     )
 
-    store = await StoreService(repository).create(owner_id, request)
+    store = await make_service(
+        repository,
+        [make_verification(owner_id)],
+    ).create(owner_id, request)
 
     assert store.owner_id == owner_id
     assert store.business_verification_id == 101
@@ -81,12 +139,52 @@ async def test_create_store_assigns_authenticated_owner() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["INVALID", None])
+async def test_create_store_requires_verified_business(
+    status: str | None,
+) -> None:
+    owner_id = uuid4()
+    repository = FakeStoreRepository()
+    verifications = (
+        [] if status is None else [make_verification(owner_id, status=status)]
+    )
+    service = make_service(repository, verifications)
+    request = StoreCreateRequest(
+        name="우왕 카페",
+        address="서울특별시 강남구",
+        businessVerificationId=101,
+    )
+
+    with pytest.raises(BusinessVerificationRequiredError):
+        await service.create(owner_id, request)
+
+    assert repository.stores == []
+
+
+@pytest.mark.asyncio
+async def test_create_store_rejects_another_users_verification() -> None:
+    owner_id = uuid4()
+    service = make_service(
+        FakeStoreRepository(),
+        [make_verification(uuid4())],
+    )
+    request = StoreCreateRequest(
+        name="우왕 카페",
+        address="서울특별시 강남구",
+        businessVerificationId=101,
+    )
+
+    with pytest.raises(BusinessVerificationRequiredError):
+        await service.create(owner_id, request)
+
+
+@pytest.mark.asyncio
 async def test_list_stores_returns_only_active_owner_stores() -> None:
     owner_id = uuid4()
     active = make_store(owner_id)
     deleted = make_store(owner_id, deleted_at=datetime.now(UTC))
     another_owner = make_store(uuid4())
-    service = StoreService(FakeStoreRepository([active, deleted, another_owner]))
+    service = make_service(FakeStoreRepository([active, deleted, another_owner]))
 
     stores = await service.list_for_owner(owner_id)
 
@@ -97,7 +195,7 @@ async def test_list_stores_returns_only_active_owner_stores() -> None:
 async def test_get_store_rejects_another_owner() -> None:
     owner_id = uuid4()
     store = make_store(owner_id)
-    service = StoreService(FakeStoreRepository([store]))
+    service = make_service(FakeStoreRepository([store]))
 
     with pytest.raises(StoreNotFoundError):
         await service.get_for_owner(store.id, uuid4())
@@ -111,7 +209,7 @@ async def test_update_store_changes_only_requested_fields() -> None:
         address="기존 주소",
         photo_url="https://example.com/old.jpg",
     )
-    service = StoreService(FakeStoreRepository([store]))
+    service = make_service(FakeStoreRepository([store]))
 
     updated = await service.update(
         store.id,
@@ -132,10 +230,28 @@ async def test_update_store_changes_only_requested_fields() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_store_validates_changed_business_verification() -> None:
+    owner_id = uuid4()
+    store = make_store(owner_id, business_verification_id=101)
+    service = make_service(
+        FakeStoreRepository([store]),
+        [make_verification(owner_id, verification_id=202)],
+    )
+
+    updated = await service.update(
+        store.id,
+        owner_id,
+        StoreUpdateRequest(businessVerificationId=202),
+    )
+
+    assert updated.business_verification_id == 202
+
+
+@pytest.mark.asyncio
 async def test_delete_store_sets_soft_delete_timestamp() -> None:
     owner_id = uuid4()
     store = make_store(owner_id)
-    service = StoreService(FakeStoreRepository([store]))
+    service = make_service(FakeStoreRepository([store]))
 
     await service.delete(store.id, owner_id)
 

@@ -12,7 +12,10 @@ from app.core.auth import AuthenticatedUser, get_current_user
 from app.models.store import Store
 from app.models.user import User
 from app.schemas.store import StoreCreateRequest, StoreUpdateRequest
-from app.services.store import StoreNotFoundError
+from app.services.store import (
+    BusinessVerificationRequiredError,
+    StoreNotFoundError,
+)
 
 
 class StubUserService:
@@ -43,12 +46,15 @@ class StubStoreService:
             business_size="UNDER_FIVE",
         )
         self.deleted = False
+        self.reject_verification = False
 
     async def create(
         self,
         owner_id: UUID,
         request: StoreCreateRequest,
     ) -> Store:
+        if self.reject_verification:
+            raise BusinessVerificationRequiredError
         self.store = Store(
             id=uuid4(),
             owner_id=owner_id,
@@ -141,6 +147,37 @@ def test_create_store_uses_camel_case_contract() -> None:
         "payday": 25,
         "businessSize": "FIVE_OR_MORE",
     }
+
+
+def test_create_store_requires_business_verification_id() -> None:
+    client, _, _ = create_client()
+
+    response = client.post(
+        "/api/v1/stores",
+        json={
+            "name": "새 매장",
+            "address": "서울특별시 마포구 1",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_store_rejects_unverified_business() -> None:
+    client, _, store_service = create_client()
+    store_service.reject_verification = True
+
+    response = client.post(
+        "/api/v1/stores",
+        json={
+            "name": "새 매장",
+            "address": "서울특별시 마포구 1",
+            "businessVerificationId": 202,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "A verified business registration is required"}
 
 
 def test_list_stores_returns_wrapper() -> None:
