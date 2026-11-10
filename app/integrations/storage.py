@@ -75,6 +75,10 @@ class SupabaseStorageClient:
             headers={"Content-Type": content_type, "x-upsert": "true"},
         )
 
+    def public_url(self, path: str) -> str:
+        """공개 버킷 파일의 만료되지 않는 주소를 만듭니다."""
+        return f"{self._base_url}/object/public/{self._bucket}/{quote(path)}"
+
     async def delete(self, paths: Sequence[str]) -> None:
         """버킷에서 파일을 지웁니다."""
         if not paths:

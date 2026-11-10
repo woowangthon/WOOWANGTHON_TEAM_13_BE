@@ -14,6 +14,7 @@ from app.api.v1.payroll import router as payroll_router
 from app.api.v1.recipe_scans import router as recipe_scans_router
 from app.api.v1.recipes import router as recipes_router
 from app.api.v1.schedules import router as schedules_router
+from app.api.v1.store_photos import router as store_photos_router
 from app.api.v1.stores import router as stores_router
 from app.api.v1.users import router as users_router
 
@@ -22,6 +23,7 @@ api_router.include_router(health_router)
 api_router.include_router(users_router)
 api_router.include_router(business_verifications_router)
 api_router.include_router(stores_router)
+api_router.include_router(store_photos_router)
 api_router.include_router(invitations_router)
 api_router.include_router(manuals_router)
 api_router.include_router(recipes_router)
