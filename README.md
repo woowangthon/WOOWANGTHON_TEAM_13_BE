@@ -499,6 +499,8 @@ Gemini가 질문과 답변을 매뉴얼 제목·본문 초안(`{ "title", "body"
 | `GET` | `/api/v1/stores/{storeId}/payroll/estimates?month=YYYY-MM` | 직원별 예상 급여 목록 (사장님) |
 | `GET` | `/api/v1/stores/{storeId}/payroll/estimates/{estimateId}?month=YYYY-MM` | 예상 급여 상세 |
 
+- 근무 시간은 근무표 달력과 같은 규칙으로 계산합니다. 매장 쉬는 요일과 공휴일 휴무일의 고정 근무는 빠지고,
+  사장님이 그날 따로 정한 근무는 들어갑니다.
 - 예상 급여는 저장하지 않고 조회할 때 계산합니다. 그래서 `estimateId`는 구성원 ID(`memberId`)와 같습니다.
 - `estimates/me`는 재직 중인 알바생만 조회할 수 있고, 구성원이 아닌 사장님은 `403`을 받습니다.
 - 목록은 사장님만 조회할 수 있으며 재직 중인 직원 전체를 가입 순서로, 근무가 없는 직원도 0원으로 반환합니다.

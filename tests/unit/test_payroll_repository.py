@@ -259,3 +259,96 @@ async def test_list_active_memberships_excludes_left(session: Session) -> None:
     assert found[0].id == store.id
     assert {member.id for member in found[1]} == {first.id, second.id}
     assert await repo.list_active_memberships_with_store(deleted_store.id) is None
+
+
+async def test_closed_weekdays_and_holidays_are_skipped_like_calendar(
+    session: Session,
+) -> None:
+    store = add_store(session)
+    store.closed_weekdays = [2]
+    store.closed_on_holidays = True
+    member = add_member(session, store)
+    first = add_schedule_assignment(session, store, member, weekday=2)
+    session.add_all(
+        ScheduleAssignment(
+            id=uuid4(),
+            store_id=store.id,
+            template_id=first.template_id,
+            weekday=weekday,
+            assignee_user_id=member.user_id,
+        )
+        for weekday in (3, 4)
+    )
+    session.commit()
+
+    # 2026-12-23(수) 쉬는 요일, 12-24(목) 근무, 12-25(금) 성탄절
+    shifts = await repository(session).list_published_shift_times(
+        store.id, [member.id], date(2026, 12, 23), date(2026, 12, 25)
+    )
+
+    assert shifts[member.id] == [(date(2026, 12, 24), time(10), time(14))]
+
+
+async def test_holidays_count_when_store_opens_on_holidays(session: Session) -> None:
+    store = add_store(session)
+    store.closed_on_holidays = False
+    member = add_member(session, store)
+    add_schedule_assignment(session, store, member, weekday=4)
+    session.commit()
+
+    shifts = await repository(session).list_published_shift_times(
+        store.id, [member.id], date(2026, 12, 25), date(2026, 12, 25)
+    )
+
+    assert shifts[member.id] == [(date(2026, 12, 25), time(10), time(14))]
+
+
+async def test_daily_override_on_closed_day_still_counts(session: Session) -> None:
+    store = add_store(session)
+    store.closed_weekdays = [0]
+    member = add_member(session, store)
+    assignment = add_schedule_assignment(session, store, member, weekday=0)
+    session.add(
+        ScheduleDayOverride(
+            id=uuid4(),
+            store_id=store.id,
+            work_date=date(2026, 11, 9),
+            created_by_user_id=store.owner_id,
+            shifts=[
+                ScheduleDayShift(
+                    id=uuid4(),
+                    template_id=assignment.template_id,
+                    assignee_user_id=member.user_id,
+                    template=assignment.template,
+                )
+            ],
+        )
+    )
+    session.commit()
+
+    shifts = await repository(session).list_published_shift_times(
+        store.id, [member.id], date(2026, 11, 2), date(2026, 11, 9)
+    )
+
+    assert shifts[member.id] == [(date(2026, 11, 9), time(10), time(14))]
+
+
+async def test_user_shift_times_include_owner_without_membership(
+    session: Session,
+) -> None:
+    store = add_store(session)
+    member = add_member(session, store)
+    assignment = add_schedule_assignment(session, store, member, weekday=0)
+    assignment.assignee_user_id = store.owner_id
+    session.commit()
+
+    repo = repository(session)
+    owner_shifts = await repo.list_user_shift_times(
+        store.id, store.owner_id, date(2026, 11, 9), date(2026, 11, 9)
+    )
+    member_shifts = await repo.list_user_shift_times(
+        store.id, member.user_id, date(2026, 11, 9), date(2026, 11, 9)
+    )
+
+    assert owner_shifts == [(date(2026, 11, 9), time(10), time(14))]
+    assert member_shifts == []
