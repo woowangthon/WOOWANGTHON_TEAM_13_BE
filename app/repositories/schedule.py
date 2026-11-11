@@ -53,6 +53,14 @@ class ScheduleRepository:
         result.extend((row[0], row[1], row[2], "staff") for row in staff.all())
         return result
 
+    async def get_store_closure(self, store_id: UUID) -> tuple[list[int], bool]:
+        query = select(Store.closed_weekdays, Store.closed_on_holidays).where(
+            Store.id == store_id,
+            Store.deleted_at.is_(None),
+        )
+        row = (await self._session.execute(query)).one()
+        return list(row[0]), row[1]
+
     async def create_template(self, template: ShiftTemplate) -> ShiftTemplate:
         self._session.add(template)
         await self._commit()

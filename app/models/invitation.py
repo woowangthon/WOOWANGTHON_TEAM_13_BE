@@ -1,8 +1,19 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Uuid, func, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    Uuid,
+    func,
+    text,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
@@ -61,6 +72,43 @@ class Invitation(Base):
         ForeignKey("users.id", ondelete="RESTRICT"),
         nullable=True,
     )
+    schedule: Mapped[list["InvitationScheduleAssignment"]] = relationship(
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class InvitationScheduleAssignment(Base):
+    """가입 전 초대 대상자에게 예약한 요일별 고정 근무입니다."""
+
+    __tablename__ = "invitation_schedule_assignments"
+    __table_args__ = (
+        CheckConstraint(
+            "weekday BETWEEN 0 AND 6",
+            name="ck_invitation_schedule_assignment_weekday",
+        ),
+        UniqueConstraint(
+            "invitation_id",
+            "template_id",
+            "weekday",
+            name="uq_invitation_schedule_template_weekday",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    invitation_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("invitations.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    template_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("shift_templates.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    weekday: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class InvitationAttempt(Base):

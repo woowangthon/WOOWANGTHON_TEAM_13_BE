@@ -9,6 +9,10 @@ from app.models.schedule import (
     ShiftTemplate,
     SubstituteRequest,
 )
+from app.schemas.schedule import (
+    ShiftTemplateCreateRequest,
+    ShiftTemplateUpdateRequest,
+)
 from app.services.schedule import (
     ScheduleService,
     SubstituteRequestForbiddenError,
@@ -51,6 +55,26 @@ class StubRepository:
         )
         self.overrides: dict[tuple[UUID, date], ScheduleAssignmentOverride] = {}
         self.requests: dict[UUID, SubstituteRequest] = {}
+        self.closed_weekdays: list[int] = []
+        self.closed_on_holidays = False
+
+    async def get_store_closure(self, store_id: UUID):
+        return self.closed_weekdays, self.closed_on_holidays
+
+    async def create_template(self, template: ShiftTemplate):
+        template.id = uuid4()
+        self.template = template
+        return template
+
+    async def list_templates(self, store_id: UUID):
+        return [self.template]
+
+    async def get_template(self, store_id: UUID, template_id: UUID):
+        return self.template if template_id == self.template.id else None
+
+    async def save_template(self, template: ShiftTemplate):
+        self.template = template
+        return template
 
     async def list_workers(self, store_id: UUID):
         return [
@@ -170,4 +194,67 @@ async def test_only_current_assignee_can_request_substitute() -> None:
             repository.assignment.id,
             WORK_DATE,
             STAFF_ID,
+        )
+
+
+@pytest.mark.asyncio
+async def test_calendar_excludes_closed_weekdays_and_holidays() -> None:
+    repository = StubRepository()
+    repository.closed_weekdays = [WORK_DATE.weekday()]
+    repository.closed_on_holidays = True
+    holiday = WORK_DATE + timedelta(days=7)
+    service = ScheduleService(
+        repository,
+        StubAccess(),
+        clock=lambda: NOW,
+        holiday_checker=lambda value: value == holiday,
+    )
+
+    occurrences, _ = await service.calendar(
+        STORE_ID,
+        STAFF_ID,
+        WORK_DATE,
+        holiday,
+    )
+
+    assert occurrences == []
+
+
+@pytest.mark.asyncio
+async def test_shift_template_headcount_is_created_and_updated() -> None:
+    repository = StubRepository()
+    service = ScheduleService(repository, StubAccess())
+
+    created = await service.create_template(
+        STORE_ID,
+        OWNER_ID,
+        ShiftTemplateCreateRequest(
+            name="오픈",
+            start="09:00",
+            end="15:00",
+            headcount=4,
+        ),
+    )
+    assert created.headcount == 4
+
+    updated = await service.update_template(
+        STORE_ID,
+        created.id,
+        OWNER_ID,
+        ShiftTemplateUpdateRequest(headcount=2),
+    )
+
+    assert updated.headcount == 2
+
+
+@pytest.mark.parametrize("headcount", [0, 11])
+def test_shift_template_headcount_must_be_between_one_and_ten(
+    headcount: int,
+) -> None:
+    with pytest.raises(ValueError):
+        ShiftTemplateCreateRequest(
+            name="오픈",
+            start="09:00",
+            end="15:00",
+            headcount=headcount,
         )

@@ -9,9 +9,10 @@ from app.models.invitation import Invitation, InvitationAttempt
 from app.models.membership import Membership
 from app.models.store import Store
 from app.models.user import User
-from app.schemas.invitation import InvitationCreateRequest
+from app.schemas.invitation import InvitationCreateRequest, InvitationUpdateRequest
 from app.services.invitation import (
     INVITATION_ALPHABET,
+    InvalidInvitationScheduleError,
     InvitationAlreadyAvailableError,
     InvitationAlreadyJoinedError,
     InvitationInvalidError,
@@ -32,6 +33,7 @@ class FakeInvitationRepository:
         self.attempts: dict[UUID, InvitationAttempt] = {}
         self.created: list[Invitation] = []
         self.consume_succeeds = True
+        self.shift_template_ids: set[UUID] = set()
 
     async def create(self, invitation: Invitation) -> Invitation:
         invitation.id = uuid4()
@@ -72,12 +74,13 @@ class FakeInvitationRepository:
         invitation_id: UUID,
         store_id: UUID,
     ) -> Invitation | None:
-        if self.context is None:
-            return None
-        invitation = self.context[0]
-        if invitation.id == invitation_id and invitation.store_id == store_id:
-            return invitation
+        for invitation in await self.list_by_store_id(store_id):
+            if invitation.id == invitation_id:
+                return invitation
         return None
+
+    async def list_shift_template_ids(self, store_id: UUID) -> set[UUID]:
+        return self.shift_template_ids
 
     async def get_active_membership(
         self,
@@ -257,6 +260,53 @@ async def test_create_copies_staff_terms_to_invitation() -> None:
     assert invitation.staff_name == "지은"
     assert invitation.hourly_wage == 10_320
     assert invitation.store_id == store.id
+
+
+@pytest.mark.asyncio
+async def test_create_and_update_invitation_schedule() -> None:
+    _, store, owner = make_context()
+    repository = FakeInvitationRepository()
+    template_id = uuid4()
+    repository.shift_template_ids = {template_id}
+    service = InvitationService(repository, code_generator=lambda: "K7P2QX")
+
+    invitation = await service.create(
+        store,
+        owner.id,
+        InvitationCreateRequest(
+            staffName="지은",
+            hourlyWage=10_320,
+            schedule=[{"templateId": template_id, "weekday": 1}],
+        ),
+    )
+    updated = await service.update(
+        store.id,
+        invitation.id,
+        InvitationUpdateRequest(
+            schedule=[{"templateId": template_id, "weekday": 3}]
+        ),
+    )
+
+    assert [(item.template_id, item.weekday) for item in updated.schedule] == [
+        (template_id, 3)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_schedule_template_from_another_store() -> None:
+    _, store, owner = make_context()
+    repository = FakeInvitationRepository()
+
+    with pytest.raises(InvalidInvitationScheduleError):
+        await InvitationService(repository).create(
+            store,
+            owner.id,
+            InvitationCreateRequest(
+                staffName="지은",
+                hourlyWage=10_320,
+                schedule=[{"templateId": uuid4(), "weekday": 1}],
+            ),
+        )
 
 
 @pytest.mark.asyncio

@@ -17,10 +17,12 @@ from app.schemas.invitation import (
     InvitationCreateRequest,
     InvitationListResponse,
     InvitationResponse,
+    InvitationScheduleInput,
     InvitationShareInfoResponse,
     InvitationStatus,
     InvitationStoreResponse,
     InvitationSummaryResponse,
+    InvitationUpdateRequest,
     InvitationVerificationResponse,
     MembershipResponse,
 )
@@ -32,6 +34,7 @@ from app.schemas.membership import (
     TaxType,
 )
 from app.services.invitation import (
+    InvalidInvitationScheduleError,
     InvitationAlreadyAvailableError,
     InvitationAlreadyJoinedError,
     InvitationCodeGenerationError,
@@ -147,10 +150,33 @@ def _invitation_summary(invitation: Invitation) -> InvitationSummaryResponse:
         code=invitation.code,
         staff_name=invitation.staff_name,
         hourly_wage=invitation.hourly_wage,
+        schedule=_invitation_schedule(invitation),
         created_at=invitation.created_at,
         status=_invitation_status(invitation),
         accepted_at=invitation.accepted_at,
         revoked_at=invitation.revoked_at,
+    )
+
+
+def _invitation_schedule(invitation: Invitation) -> list[InvitationScheduleInput]:
+    return [
+        InvitationScheduleInput(template_id=item.template_id, weekday=item.weekday)
+        for item in sorted(
+            invitation.schedule,
+            key=lambda item: (item.weekday, str(item.template_id)),
+        )
+    ]
+
+
+def _invitation_response(invitation: Invitation) -> InvitationResponse:
+    return InvitationResponse(
+        invitation_id=invitation.id,
+        store_id=invitation.store_id,
+        code=invitation.code,
+        staff_name=invitation.staff_name,
+        hourly_wage=invitation.hourly_wage,
+        schedule=_invitation_schedule(invitation),
+        created_at=invitation.created_at,
     )
 
 
@@ -239,14 +265,16 @@ async def create_invitation(
                 "detail": None,
             },
         )
-    return InvitationResponse(
-        invitation_id=invitation.id,
-        store_id=invitation.store_id,
-        code=invitation.code,
-        staff_name=invitation.staff_name,
-        hourly_wage=invitation.hourly_wage,
-        created_at=invitation.created_at,
-    )
+    except InvalidInvitationScheduleError:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={
+                "code": "INVALID_SHIFT_TEMPLATE",
+                "message": "다른 매장의 템플릿이 포함되어 있어요",
+                "detail": None,
+            },
+        )
+    return _invitation_response(invitation)
 
 
 @router.get(
@@ -279,6 +307,104 @@ async def list_invitations(
     return InvitationListResponse(
         invitations=[_invitation_summary(item) for item in invitations]
     )
+
+
+@router.get(
+    "/stores/{store_id}/invitations/{invitation_id}",
+    response_model=InvitationResponse,
+)
+async def get_invitation(
+    store_id: UUID,
+    invitation_id: UUID,
+    identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+    store_service: Annotated[StoreService, Depends(get_store_service)],
+    invitation_service: Annotated[InvitationService, Depends(get_invitation_service)],
+) -> InvitationResponse | Response:
+    owner = await _active_user(user_service, identity)
+    try:
+        await store_service.get_for_owner(store_id, owner.id)
+        invitation = await invitation_service.get(store_id, invitation_id)
+    except StoreNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "STORE_NOT_FOUND",
+                "message": "매장을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    except InvitationNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "INVITE_NOT_FOUND",
+                "message": "초대 코드를 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    return _invitation_response(invitation)
+
+
+@router.patch(
+    "/stores/{store_id}/invitations/{invitation_id}",
+    response_model=InvitationResponse,
+)
+async def update_invitation(
+    store_id: UUID,
+    invitation_id: UUID,
+    request: InvitationUpdateRequest,
+    identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+    store_service: Annotated[StoreService, Depends(get_store_service)],
+    invitation_service: Annotated[InvitationService, Depends(get_invitation_service)],
+) -> InvitationResponse | Response:
+    owner = await _active_user(user_service, identity)
+    try:
+        await store_service.get_for_owner(store_id, owner.id)
+        invitation = await invitation_service.update(store_id, invitation_id, request)
+    except StoreNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "STORE_NOT_FOUND",
+                "message": "매장을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    except InvitationNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "INVITE_NOT_FOUND",
+                "message": "초대 코드를 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    except InvitationRevokedError as error:
+        return _error_response(error)
+    except InvitationAlreadyAvailableError as error:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "code": "INVITE_ALREADY_AVAILABLE",
+                "message": "해당 직원에게 이미 사용 가능한 초대 코드가 있어요",
+                "detail": {
+                    "invitationId": str(error.invitation.id),
+                    "code": error.invitation.code,
+                },
+            },
+        )
+    except InvalidInvitationScheduleError:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            content={
+                "code": "INVALID_SHIFT_TEMPLATE",
+                "message": "다른 매장의 템플릿이 포함되어 있어요",
+                "detail": None,
+            },
+        )
+    return _invitation_response(invitation)
 
 
 @router.get(

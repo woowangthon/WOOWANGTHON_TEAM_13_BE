@@ -29,6 +29,16 @@ class StoreSchema(BaseModel):
 BusinessSize = Literal["UNDER_FIVE", "FIVE_OR_MORE"]
 
 
+def _validate_closed_weekdays(value: list[int] | None) -> list[int] | None:
+    if value is None:
+        return None
+    if len(value) != len(set(value)):
+        raise ValueError("closed weekdays must not contain duplicates")
+    if any(day < 0 or day > 6 for day in value):
+        raise ValueError("closed weekdays must be between 0 and 6")
+    return sorted(value)
+
+
 class StoreCreateRequest(StoreSchema):
     name: str = Field(min_length=1, max_length=100)
     address: str = Field(min_length=1, max_length=255)
@@ -36,6 +46,8 @@ class StoreCreateRequest(StoreSchema):
     photo_url: str | None = Field(default=None, max_length=2048)
     payday: int | None = None
     business_size: BusinessSize | None = None
+    closed_weekdays: list[int] = Field(default_factory=list, max_length=7)
+    closed_on_holidays: bool = False
     shift_templates: list[ShiftTemplateInput] = Field(
         default_factory=list,
         max_length=20,
@@ -74,6 +86,11 @@ class StoreCreateRequest(StoreSchema):
     def validate_payday(cls, value: int | None) -> int | None:
         return _validate_payday(value)
 
+    @field_validator("closed_weekdays")
+    @classmethod
+    def validate_closed_weekdays(cls, value: list[int]) -> list[int]:
+        return _validate_closed_weekdays(value) or []
+
 
 class StoreUpdateRequest(StoreSchema):
     name: str | None = Field(default=None, max_length=100)
@@ -82,6 +99,8 @@ class StoreUpdateRequest(StoreSchema):
     photo_url: str | None = Field(default=None, max_length=2048)
     payday: int | None = None
     business_size: BusinessSize | None = None
+    closed_weekdays: list[int] | None = Field(default=None, max_length=7)
+    closed_on_holidays: bool | None = None
 
     @field_validator("name", "address")
     @classmethod
@@ -105,6 +124,11 @@ class StoreUpdateRequest(StoreSchema):
     def validate_payday(cls, value: int | None) -> int | None:
         return _validate_payday(value)
 
+    @field_validator("closed_weekdays")
+    @classmethod
+    def validate_closed_weekdays(cls, value: list[int] | None) -> list[int] | None:
+        return _validate_closed_weekdays(value)
+
     @model_validator(mode="after")
     def require_at_least_one_field(self) -> "StoreUpdateRequest":
         """수정할 필드가 하나 이상인지 검사합니다."""
@@ -115,6 +139,13 @@ class StoreUpdateRequest(StoreSchema):
             and self.business_verification_id is None
         ):
             raise ValueError("business verification id must not be null")
+        if "closed_weekdays" in self.model_fields_set and self.closed_weekdays is None:
+            raise ValueError("closed weekdays must not be null")
+        if (
+            "closed_on_holidays" in self.model_fields_set
+            and self.closed_on_holidays is None
+        ):
+            raise ValueError("closed on holidays must not be null")
         return self
 
 
@@ -127,6 +158,8 @@ class StoreResponse(StoreSchema):
     photo_url: str | None
     payday: int | None
     business_size: BusinessSize | None
+    closed_weekdays: list[int]
+    closed_on_holidays: bool
 
 
 class StoreListResponse(StoreSchema):

@@ -1,9 +1,12 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from functools import lru_cache
 from typing import Literal, Protocol, cast
 from uuid import UUID
 from zoneinfo import ZoneInfo
+
+import holidays
 
 from app.models.schedule import (
     ScheduleAssignment,
@@ -67,6 +70,7 @@ class ScheduleWorker:
 
 class ScheduleRepositoryProtocol(Protocol):
     async def list_workers(self, store_id: UUID) -> list[WorkerRecord]: ...
+    async def get_store_closure(self, store_id: UUID) -> tuple[list[int], bool]: ...
     async def create_template(self, template: ShiftTemplate) -> ShiftTemplate: ...
     async def list_templates(self, store_id: UUID) -> list[ShiftTemplate]: ...
     async def get_template(
@@ -126,16 +130,27 @@ def _overlaps(start_a: time, end_a: time, start_b: time, end_b: time) -> bool:
     return start_a < end_b and start_b < end_a
 
 
+@lru_cache(maxsize=8)
+def _korean_holidays(year: int) -> holidays.HolidayBase:
+    return holidays.KR(years=year)
+
+
+def _is_korean_holiday(value: date) -> bool:
+    return value in _korean_holidays(value.year)
+
+
 class ScheduleService:
     def __init__(
         self,
         repository: ScheduleRepositoryProtocol,
         store_access: StoreAccessProtocol,
         clock: Callable[[], datetime] | None = None,
+        holiday_checker: Callable[[date], bool] | None = None,
     ) -> None:
         self._repository = repository
         self._store_access = store_access
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._holiday_checker = holiday_checker or _is_korean_holiday
 
     async def workers(self, store_id: UUID, user_id: UUID) -> list[ScheduleWorker]:
         await self._store_access.ensure_member(store_id, user_id)
@@ -167,6 +182,7 @@ class ScheduleService:
                 start_time=_parse_time(request.start),
                 end_time=_parse_time(request.end),
                 role=request.role,
+                headcount=request.headcount,
                 sort_order=request.sort_order,
             )
         )
@@ -198,6 +214,8 @@ class ScheduleService:
             raise ValueError("end must be later than start")
         if request.role is not None:
             template.role = request.role
+        if request.headcount is not None:
+            template.headcount = request.headcount
         if request.sort_order is not None:
             template.sort_order = request.sort_order
         return await self._repository.save_template(template)
@@ -258,6 +276,9 @@ class ScheduleService:
         if end_date < start_date or (end_date - start_date).days > 62:
             raise ValueError("calendar period must be between 1 and 63 days")
         assignments = await self._repository.list_assignments(store_id)
+        closed_weekdays, closed_on_holidays = (
+            await self._repository.get_store_closure(store_id)
+        )
         overrides = await self._repository.list_overrides(
             [item.id for item in assignments], start_date, end_date
         )
@@ -268,6 +289,11 @@ class ScheduleService:
         occurrences: list[tuple[ScheduleAssignment, date, UUID, bool]] = []
         cursor = start_date
         while cursor <= end_date:
+            if cursor.weekday() in closed_weekdays or (
+                closed_on_holidays and self._holiday_checker(cursor)
+            ):
+                cursor += timedelta(days=1)
+                continue
             for assignment in assignments:
                 if assignment.weekday != cursor.weekday():
                     continue

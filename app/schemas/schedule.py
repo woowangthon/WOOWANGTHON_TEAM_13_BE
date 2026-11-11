@@ -36,6 +36,7 @@ class ShiftTemplateInput(ScheduleSchema):
     start: str
     end: str
     role: str = Field(default="", max_length=50)
+    headcount: int = Field(default=1, ge=1, le=10)
     sort_order: int = Field(default=0, ge=0, le=100)
 
     @field_validator("name", "role")
@@ -66,6 +67,7 @@ class ShiftTemplateUpdateRequest(ScheduleSchema):
     start: str | None = None
     end: str | None = None
     role: str | None = Field(default=None, max_length=50)
+    headcount: int | None = Field(default=None, ge=1, le=10)
     sort_order: int | None = Field(default=None, ge=0, le=100)
 
     @field_validator("name", "role")
@@ -93,6 +95,7 @@ class ShiftTemplateResponse(ScheduleSchema):
     start: str
     end: str
     role: str
+    headcount: int
     sort_order: int
 
 

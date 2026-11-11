@@ -26,6 +26,9 @@ class ShiftTemplate(Base):
     __tablename__ = "shift_templates"
     __table_args__ = (
         CheckConstraint("end_time > start_time", name="ck_shift_template_time"),
+        CheckConstraint(
+            "headcount BETWEEN 1 AND 10", name="ck_shift_templates_headcount"
+        ),
         UniqueConstraint("store_id", "name", name="uq_shift_templates_store_name"),
     )
 
@@ -40,6 +43,9 @@ class ShiftTemplate(Base):
     start_time: Mapped[time] = mapped_column(Time, nullable=False)
     end_time: Mapped[time] = mapped_column(Time, nullable=False)
     role: Mapped[str] = mapped_column(String(50), default="", nullable=False)
+    headcount: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -98,6 +98,7 @@ def _template_response(item: ShiftTemplate) -> ShiftTemplateResponse:
         start=_time_text(item.start_time),
         end=_time_text(item.end_time),
         role=item.role,
+        headcount=item.headcount,
         sort_order=item.sort_order,
     )
 
