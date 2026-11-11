@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 from app.models.assistant_chat import AssistantChat, AssistantMessage
 from app.models.handover import HandoverItem, HandoverNote
 from app.models.membership import Membership
-from app.models.notification import NotificationRead
+from app.models.notification import NotificationRead, ScheduleChangeNotice
 from app.models.owner_question import OwnerQuestion
 from app.models.schedule import (
     ScheduleAssignment,
@@ -25,6 +25,8 @@ from app.models.schedule import (
 from app.models.store import Store
 from app.models.user import User
 from app.repositories.notification import NotificationRepository
+from app.repositories.schedule_change import ScheduleChangeRepository
+from app.services.schedule_change import ScheduleChange
 
 NOW = datetime(2026, 11, 12, 0, tzinfo=UTC)
 SINCE = NOW - timedelta(days=14)
@@ -47,6 +49,9 @@ class SyncSessionAdapter:
 
     def add(self, item: Any) -> None:
         self._session.add(item)
+
+    def add_all(self, items: Any) -> None:
+        self._session.add_all(items)
 
     async def commit(self) -> None:
         self._session.commit()
@@ -72,6 +77,7 @@ def session() -> Iterator[Session]:
         SubstituteRequest.__table__,
         ScheduleAssignmentOverride.__table__,
         NotificationRead.__table__,
+        ScheduleChangeNotice.__table__,
     ]
     User.metadata.create_all(engine, tables=tables)
     with Session(engine, expire_on_commit=False) as db_session:
@@ -362,3 +368,59 @@ async def test_mark_read_creates_then_moves_forward(
     assert saved is not None
     assert saved.replace(tzinfo=UTC) == later
     assert await repository.get_last_read_at(world.store.id, world.jieun) is None
+
+
+async def test_rejected_substitutes_go_to_requester(
+    session: Session,
+    world: World,
+) -> None:
+    responded = NOW + timedelta(minutes=5)
+    rejected = world.substitute(
+        world.minsu, world.jieun, status="REJECTED", responded_at=responded
+    )
+    world.substitute(
+        world.minsu, world.jieun, status="ACCEPTED", responded_at=NOW, week=1
+    )
+    world.substitute(
+        world.jieun, world.minsu, status="REJECTED", responded_at=NOW, week=2
+    )
+
+    events = await repo(session).list_rejected_substitutes(
+        world.store.id, world.minsu, SINCE
+    )
+
+    [event] = events
+    assert event.request_id == rejected.id
+    assert event.other_name == "지은"
+    assert event.at.replace(tzinfo=UTC) == responded
+
+
+async def test_schedule_change_notices_are_recorded_and_listed_per_user(
+    session: Session,
+    world: World,
+) -> None:
+    recorder = ScheduleChangeRepository(cast(AsyncSession, SyncSessionAdapter(session)))
+    await recorder.record(
+        world.store.id,
+        date(2026, 11, 18),
+        [
+            ScheduleChange(world.minsu, "CHANGED", "오픈 10:00~13:00"),
+            ScheduleChange(world.jieun, "REMOVED", "마감 18:00~22:00"),
+        ],
+    )
+    await recorder.record(world.store.id, date(2026, 11, 19), [])
+
+    events = await repo(session).list_schedule_changes(
+        world.store.id, world.minsu, NOW - timedelta(days=365 * 10)
+    )
+
+    [event] = events
+    assert event.work_date == date(2026, 11, 18)
+    assert (event.change, event.shifts_text) == ("CHANGED", "오픈 10:00~13:00")
+    assert session.query(ScheduleChangeNotice).count() == 2
+    assert (
+        await repo(session).list_schedule_changes(
+            uuid4(), world.minsu, NOW - timedelta(days=365 * 10)
+        )
+        == []
+    )

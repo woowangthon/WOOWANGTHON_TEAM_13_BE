@@ -20,6 +20,8 @@ Viewer = Literal["owner", "staff"]
 
 SUBSTITUTE_REQUESTED = "SUBSTITUTE_REQUESTED"
 SUBSTITUTE_ACCEPTED = "SUBSTITUTE_ACCEPTED"
+SUBSTITUTE_REJECTED = "SUBSTITUTE_REJECTED"
+DAILY_SCHEDULE_CHANGED = "DAILY_SCHEDULE_CHANGED"
 OWNER_ANSWERED = "OWNER_ANSWERED"
 HANDOVER_CREATED = "HANDOVER_CREATED"
 OWNER_QUESTION_ASKED = "OWNER_QUESTION_ASKED"
@@ -34,6 +36,17 @@ class SubstituteEvent:
     start_time: time
     end_time: time
     other_name: str
+    at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleChangeEvent:
+    """사장님이 바꾼 내 하루 근무입니다."""
+
+    notice_id: UUID
+    work_date: date
+    change: str
+    shifts_text: str
     at: datetime
 
 
@@ -134,6 +147,20 @@ class NotificationRepositoryProtocol(Protocol):
         since: datetime,
     ) -> list[SubstituteEvent]: ...
 
+    async def list_rejected_substitutes(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        since: datetime,
+    ) -> list[SubstituteEvent]: ...
+
+    async def list_schedule_changes(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        since: datetime,
+    ) -> list[ScheduleChangeEvent]: ...
+
     async def list_answered_questions(
         self,
         store_id: UUID,
@@ -176,13 +203,13 @@ class NotificationRepositoryProtocol(Protocol):
 
 
 class ShiftLookupProtocol(Protocol):
-    async def list_published_shift_times(
+    async def list_user_shift_times(
         self,
         store_id: UUID,
-        membership_ids: Sequence[UUID],
+        user_id: UUID,
         start_date: date,
         end_date: date,
-    ) -> dict[UUID, list[tuple[date, time, time]]]: ...
+    ) -> list[tuple[date, time, time]]: ...
 
 
 def _day(value: date) -> str:
@@ -195,6 +222,19 @@ def _shift(event: SubstituteEvent) -> str:
     start = event.start_time.strftime("%H:%M")
     end = event.end_time.strftime("%H:%M")
     return f"{_day(event.work_date)} {start}~{end}"
+
+
+SCHEDULE_CHANGE_VERBS = {
+    "ADDED": "생겼어요",
+    "REMOVED": "빠졌어요",
+    "CHANGED": "바뀌었어요",
+}
+
+
+def _schedule_change_body(event: ScheduleChangeEvent) -> str:
+    """'11/18(수) 근무가 바뀌었어요 · 오픈 10:00~13:00' 형식으로 씁니다."""
+    verb = SCHEDULE_CHANGE_VERBS.get(event.change, "바뀌었어요")
+    return f"{_day(event.work_date)} 근무가 {verb} · {event.shifts_text}"
 
 
 def _shorten(text: str) -> str:
@@ -246,16 +286,14 @@ class NotificationService:
 
     async def feed(self, store_id: UUID, user_id: UUID) -> NotificationFeed:
         """내 역할에 맞는 알림 목록과 출근 전 배너를 만듭니다."""
-        role, membership_id = await self._viewer(store_id, user_id)
+        role, _ = await self._viewer(store_id, user_id)
         now = self._clock()
         since = now - LOOKBACK
-        banner: ShiftBanner | None = None
         if role == "owner":
             items = await self._owner_items(store_id, user_id, since)
         else:
             items = await self._staff_items(store_id, user_id, since)
-            if membership_id is not None:
-                banner = await self._banner(store_id, membership_id, now)
+        banner = await self._banner(store_id, user_id, now)
         items.sort(
             key=lambda item: (item.created_at, item.notification_id), reverse=True
         )
@@ -275,13 +313,17 @@ class NotificationService:
         user_id: UUID,
         since: datetime,
     ) -> list[Notification]:
-        """알바생이 받을 대타, 대타 수락, 사장님 답변 알림을 모읍니다."""
+        """알바생이 받을 대타, 대타 결과, 근무 변경, 사장님 답변 알림을 모읍니다."""
         received = await self._repository.list_received_substitutes(
             store_id, user_id, since
         )
         accepted = await self._repository.list_accepted_substitutes(
             store_id, user_id, since
         )
+        rejected = await self._repository.list_rejected_substitutes(
+            store_id, user_id, since
+        )
+        changes = await self._repository.list_schedule_changes(store_id, user_id, since)
         answers = await self._repository.list_answered_questions(
             store_id, user_id, since
         )
@@ -308,6 +350,30 @@ class NotificationService:
                 target_id=event.request_id,
             )
             for event in accepted
+        ]
+        items += [
+            Notification(
+                notification_id=f"{SUBSTITUTE_REJECTED}:{event.request_id}",
+                type=SUBSTITUTE_REJECTED,
+                title="대타 요청이 거절됐어요",
+                body=f"{event.other_name}님이 {_shift(event)} 근무 대타를 거절했어요",
+                created_at=event.at,
+                target_kind="substitute_request",
+                target_id=event.request_id,
+            )
+            for event in rejected
+        ]
+        items += [
+            Notification(
+                notification_id=f"{DAILY_SCHEDULE_CHANGED}:{event.notice_id}",
+                type=DAILY_SCHEDULE_CHANGED,
+                title="근무가 바뀌었어요",
+                body=_schedule_change_body(event),
+                created_at=event.at,
+                target_kind="daily_schedule",
+                target_id=event.notice_id,
+            )
+            for event in changes
         ]
         items += [
             Notification(
@@ -361,19 +427,16 @@ class NotificationService:
     async def _banner(
         self,
         store_id: UUID,
-        membership_id: UUID,
+        user_id: UUID,
         now: datetime,
     ) -> ShiftBanner | None:
-        """오늘 근무가 30분 안에 시작하거나 진행 중이면 체크 안 된 항목을 모읍니다."""
+        """사장님 포함 내 근무 30분 전부터 퇴근 전까지 체크 안 된 항목을 모읍니다."""
         local_now = now.astimezone(SEOUL)
         today = local_now.date()
-        by_member = await self._shifts.list_published_shift_times(
-            store_id,
-            [membership_id],
-            today,
-            today,
+        shifts = await self._shifts.list_user_shift_times(
+            store_id, user_id, today, today
         )
-        shift = find_banner_shift(by_member.get(membership_id, []), local_now)
+        shift = find_banner_shift(shifts, local_now)
         if shift is None:
             return None
         work_date, start, end = shift

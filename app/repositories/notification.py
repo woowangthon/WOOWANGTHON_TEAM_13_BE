@@ -9,7 +9,7 @@ from sqlalchemy.orm import aliased
 
 from app.models.handover import HandoverItem, HandoverNote
 from app.models.membership import Membership
-from app.models.notification import NotificationRead
+from app.models.notification import NotificationRead, ScheduleChangeNotice
 from app.models.owner_question import OWNER_QUESTION_ANSWERED, OwnerQuestion
 from app.models.schedule import ScheduleAssignment, ShiftTemplate, SubstituteRequest
 from app.models.store import Store
@@ -18,6 +18,7 @@ from app.services.notification import (
     AnswerEvent,
     HandoverEvent,
     QuestionEvent,
+    ScheduleChangeEvent,
     SubstituteEvent,
     UncheckedItem,
     Viewer,
@@ -25,6 +26,7 @@ from app.services.notification import (
 
 SUBSTITUTE_ACCEPTED_STATUS = "ACCEPTED"
 SUBSTITUTE_CANCELLED_STATUS = "CANCELLED"
+SUBSTITUTE_REJECTED_STATUS = "REJECTED"
 
 
 def _aware(value: datetime) -> datetime:
@@ -140,6 +142,44 @@ class NotificationRepository:
             other_user=SubstituteRequest.target_user_id,
             at=SubstituteRequest.responded_at,
         )
+
+    async def list_rejected_substitutes(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        since: datetime,
+    ) -> list[SubstituteEvent]:
+        """내가 보낸 대타 요청 중 상대가 거절한 것을 조회합니다."""
+        return await self._substitutes(
+            store_id,
+            SubstituteRequest.requester_user_id == user_id,
+            SubstituteRequest.status == SUBSTITUTE_REJECTED_STATUS,
+            SubstituteRequest.responded_at.is_not(None),
+            SubstituteRequest.responded_at >= since,
+            other_user=SubstituteRequest.target_user_id,
+            at=SubstituteRequest.responded_at,
+        )
+
+    async def list_schedule_changes(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        since: datetime,
+    ) -> list[ScheduleChangeEvent]:
+        """사장님이 바꾼 내 하루 근무 기록을 조회합니다."""
+        query = select(
+            ScheduleChangeNotice.id,
+            ScheduleChangeNotice.work_date,
+            ScheduleChangeNotice.change,
+            ScheduleChangeNotice.shifts_text,
+            ScheduleChangeNotice.created_at,
+        ).where(
+            ScheduleChangeNotice.store_id == store_id,
+            ScheduleChangeNotice.user_id == user_id,
+            ScheduleChangeNotice.created_at >= since,
+        )
+        rows = (await self._session.execute(query)).all()
+        return [ScheduleChangeEvent(*row) for row in rows]
 
     async def list_answered_questions(
         self,
