@@ -1,10 +1,10 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
 
 from app.integrations.business_registration import (
-    BusinessRegistrationValidationResult,
+    BusinessRegistrationStatusResult,
 )
 from app.models.business_verification import BusinessVerification
 from app.schemas.business_verification import BusinessVerificationCreateRequest
@@ -45,16 +45,16 @@ class FakeBusinessVerificationRepository:
 class FakeBusinessRegistrationClient:
     def __init__(self, valid: bool) -> None:
         self.valid = valid
+        self.calls = 0
 
-    async def validate(
+    async def check_status(
         self,
         *,
         business_registration_number: str,
-        owner_name: str,
-        business_start_date: date,
-    ) -> BusinessRegistrationValidationResult:
-        return BusinessRegistrationValidationResult(
-            valid=self.valid,
+    ) -> BusinessRegistrationStatusResult:
+        self.calls += 1
+        return BusinessRegistrationStatusResult(
+            active=self.valid,
             message="확인 결과",
         )
 
@@ -62,8 +62,6 @@ class FakeBusinessRegistrationClient:
 def request() -> BusinessVerificationCreateRequest:
     return BusinessVerificationCreateRequest(
         businessRegistrationNumber="123-45-67890",
-        ownerName=" 홍길동 ",
-        businessStartDate="2026-01-15",
     )
 
 
@@ -86,9 +84,26 @@ async def test_creates_verification_result(
 
     assert result.requester_id == requester_id
     assert result.business_registration_number == "1234567890"
-    assert result.owner_name == "홍길동"
+    assert result.owner_name is None
+    assert result.business_start_date is None
     assert result.status == expected_status
     assert result.provider_message == "확인 결과"
+
+
+async def test_demo_number_is_verified_without_provider_call() -> None:
+    requester_id = uuid4()
+    repository = FakeBusinessVerificationRepository()
+    client = FakeBusinessRegistrationClient(False)
+    service = BusinessVerificationService(repository, client)
+
+    result = await service.create(
+        requester_id,
+        BusinessVerificationCreateRequest(businessRegistrationNumber="000-00-00000"),
+    )
+
+    assert result.status == "VERIFIED"
+    assert result.provider_message == "시연·테스트용 사업자등록번호입니다."
+    assert client.calls == 0
 
 
 async def test_result_is_private_to_requester() -> None:

@@ -8,7 +8,7 @@ from app.db.base import Base
 
 
 class BusinessVerification(Base):
-    """국세청 API로 확인한 사업자등록정보 진위 결과입니다."""
+    """국세청 API로 확인한 사업자등록 상태 결과입니다."""
 
     __tablename__ = "business_verifications"
 
@@ -26,8 +26,8 @@ class BusinessVerification(Base):
         String(10),
         nullable=False,
     )
-    owner_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    business_start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    owner_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    business_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     provider_message: Mapped[str] = mapped_column(String(500), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

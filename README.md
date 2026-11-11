@@ -298,18 +298,23 @@ uvicorn app.app:app --reload
 | `PATCH` | `/api/v1/stores/{storeId}` | 매장 정보 수정 |
 | `DELETE` | `/api/v1/stores/{storeId}` | 매장 삭제 |
 
-사업자등록정보 인증은 공공데이터포털의 국세청 진위확인 API를 사용합니다.
+사업자등록정보 인증은 공공데이터포털의 국세청 상태조회 API를 사용합니다.
 `.env`의 `NTS_BUSINESS_API_KEY`에 발급받은 서비스 키를 설정합니다.
 
 | Method | 경로 | 설명 |
 | --- | --- | --- |
-| `POST` | `/api/v1/stores/business-verifications` | 사업자등록정보 진위확인 |
+| `POST` | `/api/v1/stores/business-verifications` | 사업자등록번호 상태조회 |
 | `GET` | `/api/v1/stores/business-verifications/{verificationId}` | 본인의 인증 결과 조회 |
 
 매장 등록에는 로그인한 사용자가 요청해 `VERIFIED` 결과를 받은
 `businessVerificationId`가 반드시 필요합니다. 다른 사용자의 인증 결과나
 `INVALID` 결과로는 매장을 등록하거나 인증 정보를 변경할 수 없습니다.
 매장 대표 이미지는 `photoUrl`로 등록하거나 수정할 수 있습니다.
+
+상태조회 요청은 하이픈 포함 여부와 관계없이 10자리 `businessRegistrationNumber`만
+받습니다. 국세청 응답이 계속사업자(`b_stt_cd=01`)이면 `VERIFIED`, 휴업·폐업·미등록
+번호이면 `INVALID`로 저장합니다. 시연·테스트에서는 `000-00-00000`을 보내면 외부 API를
+호출하지 않고 `VERIFIED` 결과를 받을 수 있습니다.
 
 ### 매장 사진 업로드
 

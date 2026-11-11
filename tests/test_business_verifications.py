@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import FastAPI
@@ -22,8 +22,8 @@ class StubBusinessVerificationService:
             id=101,
             requester_id=user_id,
             business_registration_number="1234567890",
-            owner_name="홍길동",
-            business_start_date=date(2026, 1, 15),
+            owner_name=None,
+            business_start_date=None,
             status="VERIFIED",
             provider_message="확인되었습니다.",
             created_at=datetime(2026, 11, 10, tzinfo=UTC),
@@ -38,8 +38,6 @@ class StubBusinessVerificationService:
         self.verification.business_registration_number = (
             request.business_registration_number
         )
-        self.verification.owner_name = request.owner_name
-        self.verification.business_start_date = request.business_start_date
         return self.verification
 
     async def get_for_requester(
@@ -75,8 +73,6 @@ def test_create_business_verification() -> None:
         "/api/v1/stores/business-verifications",
         json={
             "businessRegistrationNumber": "123-45-67890",
-            "ownerName": " 홍길동 ",
-            "businessStartDate": "2026-01-15",
         },
     )
 
@@ -84,8 +80,8 @@ def test_create_business_verification() -> None:
     assert response.json() == {
         "verificationId": 101,
         "businessRegistrationNumber": "1234567890",
-        "ownerName": "홍길동",
-        "businessStartDate": "2026-01-15",
+        "ownerName": None,
+        "businessStartDate": None,
         "status": "VERIFIED",
         "message": "확인되었습니다.",
         "createdAt": "2026-11-10T00:00:00Z",
@@ -116,8 +112,6 @@ def test_rejects_invalid_business_registration_number() -> None:
         "/api/v1/stores/business-verifications",
         json={
             "businessRegistrationNumber": "1234",
-            "ownerName": "홍길동",
-            "businessStartDate": "2026-01-15",
         },
     )
 
