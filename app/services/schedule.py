@@ -83,6 +83,8 @@ class CalendarOccurrence:
     assignment_id: UUID | None
     daily_shift_id: UUID | None
     template: ShiftTemplate
+    start_time: time
+    end_time: time
     work_date: date
     assignee_user_id: UUID
     substituted: bool
@@ -123,7 +125,7 @@ class ScheduleRepositoryProtocol(Protocol):
         store_id: UUID,
         work_date: date,
         created_by_user_id: UUID,
-        shifts: list[tuple[UUID, UUID]],
+        shifts: list[tuple[UUID, UUID, time | None, time | None]],
         cancelled_at: datetime,
     ) -> ScheduleDayOverride: ...
     async def delete_day_override(self, override: ScheduleDayOverride) -> None: ...
@@ -319,7 +321,15 @@ class ScheduleService:
             store_id,
             work_date,
             user_id,
-            [(item.template_id, item.assignee_user_id) for item in inputs],
+            [
+                (
+                    item.template_id,
+                    item.assignee_user_id,
+                    _parse_time(item.start) if item.start is not None else None,
+                    _parse_time(item.end) if item.end is not None else None,
+                )
+                for item in inputs
+            ],
             self._clock(),
         )
         return override, workers
@@ -376,6 +386,8 @@ class ScheduleService:
                         assignment_id=None,
                         daily_shift_id=shift.id,
                         template=shift.template,
+                        start_time=shift.start_time or shift.template.start_time,
+                        end_time=shift.end_time or shift.template.end_time,
                         work_date=cursor,
                         assignee_user_id=shift.assignee_user_id,
                         substituted=False,
@@ -399,6 +411,8 @@ class ScheduleService:
                         assignment_id=assignment.id,
                         daily_shift_id=None,
                         template=assignment.template,
+                        start_time=assignment.template.start_time,
+                        end_time=assignment.template.end_time,
                         work_date=cursor,
                         assignee_user_id=(override_user or assignment.assignee_user_id),
                         substituted=override_user is not None,
@@ -409,7 +423,7 @@ class ScheduleService:
         occurrences.sort(
             key=lambda item: (
                 item.work_date,
-                item.template.start_time,
+                item.start_time,
                 item.template.sort_order,
                 str(item.daily_shift_id or item.assignment_id),
             )
@@ -525,15 +539,25 @@ class ScheduleService:
     ) -> None:
         for index, item in enumerate(inputs):
             template = templates[item.template_id]
+            start_time = _parse_time(item.start) if item.start else template.start_time
+            end_time = _parse_time(item.end) if item.end else template.end_time
             for other in inputs[index + 1 :]:
                 if item.assignee_user_id != other.assignee_user_id:
                     continue
                 other_template = templates[other.template_id]
+                other_start_time = (
+                    _parse_time(other.start)
+                    if other.start
+                    else other_template.start_time
+                )
+                other_end_time = (
+                    _parse_time(other.end) if other.end else other_template.end_time
+                )
                 if _overlaps(
-                    template.start_time,
-                    template.end_time,
-                    other_template.start_time,
-                    other_template.end_time,
+                    start_time,
+                    end_time,
+                    other_start_time,
+                    other_end_time,
                 ):
                     raise DailyScheduleConflictError
 

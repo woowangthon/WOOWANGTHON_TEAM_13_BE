@@ -127,7 +127,7 @@ class StubRepository:
         store_id: UUID,
         work_date: date,
         created_by_user_id: UUID,
-        shifts: list[tuple[UUID, UUID]],
+        shifts: list[tuple[UUID, UUID, time | None, time | None]],
         cancelled_at: datetime,
     ):
         templates = {item.id: item for item in self.templates}
@@ -141,9 +141,11 @@ class StubRepository:
                     id=uuid4(),
                     template_id=template_id,
                     assignee_user_id=assignee_user_id,
+                    start_time=start_time,
+                    end_time=end_time,
                     template=templates[template_id],
                 )
-                for template_id, assignee_user_id in shifts
+                for template_id, assignee_user_id, start_time, end_time in shifts
             ],
         )
         for request in self.requests.values():
@@ -420,6 +422,63 @@ async def test_owner_can_add_another_shift_on_one_date() -> None:
         ("오픈", STAFF_ID),
         ("미들", OWNER_ID),
     ]
+
+
+@pytest.mark.asyncio
+async def test_owner_can_change_time_for_only_one_date() -> None:
+    repository = StubRepository()
+    service = ScheduleService(repository, StubAccess(), clock=lambda: NOW)
+
+    override, _ = await service.replace_daily_schedule(
+        STORE_ID,
+        OWNER_ID,
+        WORK_DATE,
+        [
+            DailyScheduleShiftInput(
+                template_id=repository.template.id,
+                assignee_user_id=STAFF_ID,
+                start="11:30",
+                end="16:30",
+            )
+        ],
+    )
+    occurrences, _ = await service.calendar(
+        STORE_ID,
+        STAFF_ID,
+        WORK_DATE,
+        WORK_DATE + timedelta(days=7),
+    )
+
+    assert override.shifts[0].start_time == time(11, 30)
+    assert override.shifts[0].end_time == time(16, 30)
+    assert (occurrences[0].start_time, occurrences[0].end_time) == (
+        time(11, 30),
+        time(16, 30),
+    )
+    assert (occurrences[1].start_time, occurrences[1].end_time) == (
+        time(10),
+        time(14),
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"start": "11:00"},
+        {"end": "16:00"},
+        {"start": "16:00", "end": "11:00"},
+        {"start": "9:00", "end": "11:00"},
+    ],
+)
+def test_daily_schedule_custom_time_requires_valid_range(
+    payload: dict[str, str],
+) -> None:
+    with pytest.raises(ValueError):
+        DailyScheduleShiftInput(
+            template_id=uuid4(),
+            assignee_user_id=uuid4(),
+            **payload,
+        )
 
 
 @pytest.mark.asyncio

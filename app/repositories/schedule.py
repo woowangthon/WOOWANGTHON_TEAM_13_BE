@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, time
 from uuid import UUID
 
 from sqlalchemy import delete, select
@@ -208,7 +208,7 @@ class ScheduleRepository:
         store_id: UUID,
         work_date: date,
         created_by_user_id: UUID,
-        shifts: list[tuple[UUID, UUID]],
+        shifts: list[tuple[UUID, UUID, time | None, time | None]],
         cancelled_at: datetime,
     ) -> ScheduleDayOverride:
         existing = await self.get_day_override(store_id, work_date)
@@ -236,8 +236,10 @@ class ScheduleRepository:
                 ScheduleDayShift(
                     template_id=template_id,
                     assignee_user_id=assignee_user_id,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
-                for template_id, assignee_user_id in shifts
+                for template_id, assignee_user_id, start_time, end_time in shifts
             ],
         )
         self._session.add(override)
