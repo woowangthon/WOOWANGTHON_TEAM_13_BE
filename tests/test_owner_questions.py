@@ -9,6 +9,7 @@ from app.api.v1.owner_questions import router
 from app.api.v1.users import get_user_service
 from app.app import app
 from app.core.auth import AuthenticatedUser, get_current_user
+from app.integrations.llm import LLMError
 from app.models.owner_question import OwnerQuestion
 from app.models.user import User
 from app.services.manual import ManualCategoryNotFoundError
@@ -57,6 +58,7 @@ class StubOwnerQuestionService:
         self.seen_status: str | None = "unset"
         self.seen_answer: tuple[str, ManualDraft | None] | None = None
         self.manual_id: UUID | None = None
+        self.seen_draft_answer: str | None = None
 
     async def list_questions(
         self,
@@ -86,6 +88,18 @@ class StubOwnerQuestionService:
         if manual_draft is not None:
             self.manual_id = uuid4()
         return OwnerQuestionView(self.question, "지은", self.manual_id)
+
+    async def manual_draft(
+        self,
+        store_id: UUID,
+        question_id: UUID,
+        user_id: UUID,
+        answer: str,
+    ) -> ManualDraft:
+        if self.error is not None:
+            raise self.error
+        self.seen_draft_answer = answer
+        return ManualDraft(title="우산 대여", body="카운터 아래 우산을 빌려드려요.")
 
 
 def make_client() -> tuple[TestClient, StubOwnerQuestionService]:
@@ -264,3 +278,47 @@ def test_answer_error_codes() -> None:
     assert answered.json()["code"] == "OWNER_QUESTION_ALREADY_ANSWERED"
     assert missing.status_code == 404
     assert forbidden.status_code == 403
+
+
+def test_manual_draft_route_is_registered() -> None:
+    paths = app.openapi()["paths"]
+
+    assert (
+        "/api/v1/stores/{store_id}/owner-questions/{question_id}/manual-draft" in paths
+    )
+
+
+def test_manual_draft_returns_title_and_body() -> None:
+    client, service = make_client()
+
+    response = client.post(
+        questions_url(f"/{service.question.id}/manual-draft"),
+        json={"answer": " 카운터 아래 우산 빌려줘 "},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "title": "우산 대여",
+        "body": "카운터 아래 우산을 빌려드려요.",
+    }
+    assert service.seen_draft_answer == "카운터 아래 우산 빌려줘"
+    assert service.question.status == "asked"
+
+
+def test_manual_draft_errors() -> None:
+    client, service = make_client()
+    url = questions_url(f"/{service.question.id}/manual-draft")
+
+    blank = client.post(url, json={"answer": "  "})
+    service.error = LLMError("timeout")
+    unavailable = client.post(url, json={"answer": "답"})
+    service.error = StoreAccessForbiddenError()
+    forbidden = client.post(url, json={"answer": "답"})
+    service.error = OwnerQuestionNotFoundError()
+    missing = client.post(url, json={"answer": "답"})
+
+    assert blank.status_code == 422
+    assert unavailable.status_code == 503
+    assert unavailable.json()["code"] == "AI_UNAVAILABLE"
+    assert forbidden.status_code == 403
+    assert missing.status_code == 404

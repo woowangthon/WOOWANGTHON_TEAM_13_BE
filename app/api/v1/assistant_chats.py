@@ -70,6 +70,7 @@ def get_assistant_chat_service(
 
 def get_owner_question_service(
     session: Annotated[AsyncSession, Depends(get_db)],
+    llm: Annotated[LLMClient, Depends(get_llm_client)],
 ) -> OwnerQuestionService:
     """요청에 사용할 사장님께 물어보기 서비스를 생성합니다."""
     return OwnerQuestionService(
@@ -80,6 +81,8 @@ def get_owner_question_service(
             MembershipRepository(session),
         ),
         ManualRepository(session),
+        llm,
+        release=session.commit,
     )
 
 
@@ -258,8 +261,7 @@ async def list_assistant_messages(
         chat_id=chat_id,
         has_more=has_more,
         messages=[
-            to_message_response(message, asked.get(message.id))
-            for message in messages
+            to_message_response(message, asked.get(message.id)) for message in messages
         ],
     )
 
