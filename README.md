@@ -249,7 +249,9 @@ Content-Type: application/json
   "shifts": [
     {
       "templateId": "<SHIFT_TEMPLATE_ID>",
-      "assigneeUserId": "<USER_ID>"
+      "assigneeUserId": "<USER_ID>",
+      "start": "11:30",
+      "end": "16:30"
     }
   ]
 }
@@ -260,6 +262,8 @@ Content-Type: application/json
 예상 급여에도 반영됩니다. 같은 직원에게 시간이 겹치는 템플릿을 보내면
 `409 DAILY_SCHEDULE_TIME_CONFLICT`를 반환합니다. 해당 날짜의 대기 중인 대타 요청은
 하루 조정을 저장할 때 취소되고, 조정된 날짜에는 새 대타 요청을 만들 수 없습니다.
+`start`와 `end`는 둘 다 선택값이며 `HH:MM` 형식으로 함께 보내야 합니다. 생략하면 해당
+근무 템플릿의 시간을 사용하고, 값을 보내면 그 날짜의 달력과 예상 급여에만 적용됩니다.
 
 ## 사용자 정보 API
 

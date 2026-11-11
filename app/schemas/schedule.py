@@ -173,6 +173,21 @@ class ScheduleCalendarResponse(ScheduleSchema):
 class DailyScheduleShiftInput(ScheduleSchema):
     template_id: UUID
     assignee_user_id: UUID
+    start: str | None = None
+    end: str | None = None
+
+    @field_validator("start", "end")
+    @classmethod
+    def validate_time(cls, value: str | None) -> str | None:
+        return _valid_time(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "DailyScheduleShiftInput":
+        if (self.start is None) != (self.end is None):
+            raise ValueError("start and end must be provided together")
+        if self.start is not None and self.end is not None and self.end <= self.start:
+            raise ValueError("end must be later than start")
+        return self
 
 
 class DailyScheduleReplaceRequest(ScheduleSchema):

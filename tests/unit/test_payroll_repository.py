@@ -201,6 +201,8 @@ async def test_daily_schedule_override_replaces_fixed_shifts_for_payroll(
                 id=uuid4(),
                 template_id=assignment.template_id,
                 assignee_user_id=replacement.user_id,
+                start_time=time(11, 30),
+                end_time=time(16, 30),
                 template=assignment.template,
             )
         ],
@@ -223,7 +225,7 @@ async def test_daily_schedule_override_replaces_fixed_shifts_for_payroll(
     )
 
     assert shifts[original.id] == [(date(2026, 11, 2), time(10), time(14))]
-    assert shifts[replacement.id] == [(date(2026, 11, 9), time(10), time(14))]
+    assert shifts[replacement.id] == [(date(2026, 11, 9), time(11, 30), time(16, 30))]
 
 
 async def test_membership_lookup_by_id_is_scoped_to_store(session: Session) -> None:

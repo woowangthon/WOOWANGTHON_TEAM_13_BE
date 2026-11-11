@@ -192,6 +192,12 @@ class ScheduleDayShift(Base):
             "assignee_user_id",
             name="uq_schedule_day_shifts_override_template_assignee",
         ),
+        CheckConstraint(
+            "(start_time IS NULL AND end_time IS NULL) OR "
+            "(start_time IS NOT NULL AND end_time IS NOT NULL "
+            "AND end_time > start_time)",
+            name="ck_schedule_day_shifts_custom_time",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -213,6 +219,8 @@ class ScheduleDayShift(Base):
         index=True,
         nullable=False,
     )
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

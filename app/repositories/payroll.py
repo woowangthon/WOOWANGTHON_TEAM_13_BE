@@ -164,8 +164,8 @@ class PayrollRepository:
                         shifts[member_id].append(
                             (
                                 cursor,
-                                shift.template.start_time,
-                                shift.template.end_time,
+                                shift.start_time or shift.template.start_time,
+                                shift.end_time or shift.template.end_time,
                             )
                         )
                     cursor += timedelta(days=1)
