@@ -1,3 +1,4 @@
+import json
 from collections.abc import Mapping
 from datetime import date
 from typing import Any
@@ -6,7 +7,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.integrations.llm import LLMError
-from app.models.handover import HandoverNote
+from app.models.handover import HandoverItem, HandoverNote
+from app.models.user import User
 from app.schemas.handover import (
     HandoverConfirmationRequest,
     HandoverNoteCreateRequest,
@@ -17,6 +19,7 @@ from app.services.handover import (
     HandoverItemNotFoundError,
     HandoverNoteNotFoundError,
     HandoverService,
+    HandoverSummaryCache,
     interpret_draft,
     today_kst,
 )
@@ -376,3 +379,142 @@ async def test_create_draft_releases_db_before_llm(
     await service.create_draft(STORE_ID, STAFF_ID, "줄글")
 
     assert events == ["release", "llm"]
+
+
+def summary_note(
+    repository: FakeHandoverRepository,
+    text: str,
+    author: str = "민지",
+    work_date: date | None = None,
+) -> HandoverNote:
+    note = HandoverNote(
+        id=uuid4(),
+        store_id=STORE_ID,
+        author_id=STAFF_ID,
+        work_date=work_date or today_kst(),
+        raw_text=text,
+        no_issue=False,
+        summary=text,
+        items=[HandoverItem(id=uuid4(), position=0, tag="stock", text=text)],
+    )
+    note.author = User(id=STAFF_ID, auth_user_id=uuid4(), nickname=author)
+    repository.notes.insert(0, note)
+    return note
+
+
+def summary_service(
+    repository: FakeHandoverRepository,
+    llm: FakeLLM,
+    release: Any = None,
+) -> HandoverService:
+    return HandoverService(
+        repository,
+        FakeStoreAccess(),
+        llm,
+        release=release,
+        summary_cache=HandoverSummaryCache(),
+    )
+
+
+async def test_day_summary_combines_notes_in_written_order(
+    repository: FakeHandoverRepository,
+    llm: FakeLLM,
+) -> None:
+    summary_note(repository, "우유 2팩 남음", "민지")
+    summary_note(repository, "제빙기 소음", "민수")
+    llm.result = {"summary": "  우유가 2팩 남았고\n제빙기에서 소리가 나요. "}
+
+    target, summary, count = await summary_service(repository, llm).summarize_day(
+        STORE_ID, OWNER_ID, None
+    )
+
+    assert (target, count) == (today_kst(), 2)
+    assert summary == "우유가 2팩 남았고 제빙기에서 소리가 나요."
+    material = json.loads(llm.prompts[0])["notes"]
+    assert [note["author"] for note in material] == ["민지", "민수"]
+    assert material[0]["items"] == [{"tag": "stock", "text": "우유 2팩 남음"}]
+
+
+async def test_day_summary_without_notes_skips_ai(
+    repository: FakeHandoverRepository,
+    llm: FakeLLM,
+) -> None:
+    target, summary, count = await summary_service(repository, llm).summarize_day(
+        STORE_ID, STAFF_ID, date(2026, 11, 20)
+    )
+
+    assert (target, summary, count) == (date(2026, 11, 20), None, 0)
+    assert llm.prompts == []
+
+
+async def test_day_summary_reuses_cache_until_notes_change(
+    repository: FakeHandoverRepository,
+    llm: FakeLLM,
+) -> None:
+    note = summary_note(repository, "우유 2팩 남음")
+    llm.result = {"summary": "우유가 2팩 남았어요."}
+    service = summary_service(repository, llm)
+
+    await service.summarize_day(STORE_ID, STAFF_ID, None)
+    await service.summarize_day(STORE_ID, OWNER_ID, None)
+    assert len(llm.prompts) == 1
+
+    note.items[0].checked = True
+    await service.summarize_day(STORE_ID, STAFF_ID, None)
+    assert len(llm.prompts) == 1
+
+    summary_note(repository, "컵 홀더 부족")
+    await service.summarize_day(STORE_ID, STAFF_ID, None)
+    assert len(llm.prompts) == 2
+
+
+async def test_day_summary_requires_member_and_valid_ai_result(
+    repository: FakeHandoverRepository,
+    llm: FakeLLM,
+) -> None:
+    summary_note(repository, "우유 2팩 남음")
+    service = summary_service(repository, llm)
+
+    with pytest.raises(StoreNotFoundError):
+        await service.summarize_day(STORE_ID, uuid4(), None)
+    llm.result = {"summary": "   "}
+    with pytest.raises(LLMError):
+        await service.summarize_day(STORE_ID, STAFF_ID, None)
+
+
+async def test_day_summary_releases_db_before_llm(
+    repository: FakeHandoverRepository,
+    llm: FakeLLM,
+) -> None:
+    summary_note(repository, "우유 2팩 남음")
+    llm.result = {"summary": "우유가 2팩 남았어요."}
+    events: list[str] = []
+
+    async def release() -> None:
+        events.append("release")
+
+    original = llm.generate_json
+
+    async def tracked(**kwargs: Any) -> Mapping[str, Any]:
+        events.append("llm")
+        return await original(**kwargs)
+
+    llm.generate_json = tracked  # type: ignore[method-assign]
+
+    await summary_service(repository, llm, release).summarize_day(
+        STORE_ID, STAFF_ID, None
+    )
+
+    assert events == ["release", "llm"]
+
+
+def test_summary_cache_drops_oldest_entry() -> None:
+    cache = HandoverSummaryCache(max_size=1)
+    first = (STORE_ID, date(2026, 11, 1))
+    second = (STORE_ID, date(2026, 11, 2))
+    cache.put(first, "a", "요약1")
+    cache.put(second, "b", "요약2")
+
+    assert cache.get(first, "a") is None
+    assert cache.get(second, "b") == "요약2"
+    assert cache.get(second, "changed") is None

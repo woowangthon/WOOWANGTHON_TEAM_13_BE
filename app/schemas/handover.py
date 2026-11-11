@@ -131,3 +131,9 @@ class HandoverNoteResponse(HandoverSchema):
 class HandoverNoteListResponse(HandoverSchema):
     work_date: date = Field(alias="date")
     notes: list[HandoverNoteResponse]
+
+
+class HandoverSummaryResponse(HandoverSchema):
+    date: date
+    summary: str | None
+    note_count: int

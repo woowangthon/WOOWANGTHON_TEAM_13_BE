@@ -461,6 +461,10 @@ Gemini가 질문과 답변을 매뉴얼 제목·본문 초안(`{ "title", "body"
 | `PATCH` | `/api/v1/stores/{storeId}/handover-notes/{noteId}` | 수정 |
 | `DELETE` | `/api/v1/stores/{storeId}/handover-notes/{noteId}` | 삭제 |
 | `POST` | `/api/v1/stores/{storeId}/handover-notes/{noteId}/confirmations` | 항목 또는 노트 전체 체크 |
+| `GET` | `/api/v1/stores/{storeId}/handover-summary?date=YYYY-MM-DD` | 그날 인수인계 전체 AI 요약 (`{ date, summary, noteCount }`, 저장 안 함) |
+
+- 하루 요약은 인수인계가 없으면 AI를 부르지 않고 `summary: null`입니다. 그날 인수인계 내용이 그대로면
+  서버 메모리에 둔 요약을 다시 써서 Gemini 호출을 줄입니다(체크 상태만 바뀐 경우 포함).
 
 ## 알림 API
 
