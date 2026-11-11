@@ -147,7 +147,12 @@ async def test_create_store_saves_shift_templates() -> None:
         address="서울특별시 강남구",
         businessVerificationId=101,
         shiftTemplates=[
-            {"name": "오픈", "start": "10:00", "end": "14:00"},
+            {
+                "name": "오픈",
+                "start": "10:00",
+                "end": "14:00",
+                "headcount": 3,
+            },
             {"name": "마감", "start": "14:00", "end": "18:00"},
         ],
     )
@@ -159,6 +164,8 @@ async def test_create_store_saves_shift_templates() -> None:
 
     assert [item.name for item in store.shift_templates] == ["오픈", "마감"]
     assert store.shift_templates[0].start_time.isoformat(timespec="minutes") == "10:00"
+    assert store.shift_templates[0].headcount == 3
+    assert store.shift_templates[1].headcount == 1
     assert store.shift_templates[1].end_time.isoformat(timespec="minutes") == "18:00"
 
 

@@ -3,7 +3,9 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -11,6 +13,7 @@ from sqlalchemy import (
     String,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -52,6 +55,18 @@ class Store(Base):
     photo_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     payday: Mapped[int | None] = mapped_column(Integer, nullable=True)
     business_size: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    closed_weekdays: Mapped[list[int]] = mapped_column(
+        JSON,
+        default=list,
+        server_default=text("'[]'"),
+        nullable=False,
+    )
+    closed_on_holidays: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+        nullable=False,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

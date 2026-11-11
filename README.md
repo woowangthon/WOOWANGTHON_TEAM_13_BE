@@ -225,6 +225,42 @@ POST /api/v1/memberships/join
 }
 ```
 
+## 고정 스케줄과 하루 단위 근무 조정 API
+
+고정 스케줄은 매주 반복되고, 사장님은 특정 날짜의 근무 목록만 별도로 바꿀 수
+있습니다. 하루 단위 조정은 해당 날짜의 전체 근무 목록을 한 번에 교체하므로 변경,
+추가, 삭제를 하나의 요청으로 처리합니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `GET` | `/api/v1/stores/{storeId}/schedule-calendar?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD` | 고정·대타·하루 조정을 합친 달력 조회 |
+| `PUT` | `/api/v1/stores/{storeId}/schedule-calendar/{workDate}` | 해당 날짜의 근무 목록 전체 교체 (사장님) |
+| `DELETE` | `/api/v1/stores/{storeId}/schedule-calendar/{workDate}` | 하루 조정을 제거하고 고정 스케줄로 복원 (사장님) |
+
+`PUT`에는 그날 최종적으로 남길 근무를 모두 보냅니다. 한 건을 지우려면 그 근무만
+제외하고 보내고, 그날 근무를 모두 지우려면 `shifts`를 빈 배열로 보냅니다.
+
+```http
+PUT /api/v1/stores/{storeId}/schedule-calendar/2026-11-12
+Authorization: Bearer <SUPABASE_ACCESS_TOKEN>
+Content-Type: application/json
+
+{
+  "shifts": [
+    {
+      "templateId": "<SHIFT_TEMPLATE_ID>",
+      "assigneeUserId": "<USER_ID>"
+    }
+  ]
+}
+```
+
+직접 조정한 근무는 달력 응답에서 `manuallyAdjusted: true`, `assignmentId: null`,
+`dailyShiftId: "..."`로 구분됩니다. 하루 조정은 정기 휴무일이나 공휴일에도 우선하며,
+예상 급여에도 반영됩니다. 같은 직원에게 시간이 겹치는 템플릿을 보내면
+`409 DAILY_SCHEDULE_TIME_CONFLICT`를 반환합니다. 해당 날짜의 대기 중인 대타 요청은
+하루 조정을 저장할 때 취소되고, 조정된 날짜에는 새 대타 요청을 만들 수 없습니다.
+
 ## 사용자 정보 API
 
 사용자 정보 API는 모두 Supabase access token이 필요합니다. 첫

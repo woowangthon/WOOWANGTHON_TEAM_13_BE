@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 INVITATION_CODE_PATTERN = r"^[A-HJ-NP-Z2-9]{6}$"
 MINIMUM_HOURLY_WAGE_2026 = 10_320
@@ -21,9 +21,27 @@ class InvitationSchema(BaseModel):
     )
 
 
+class InvitationScheduleInput(InvitationSchema):
+    template_id: UUID
+    weekday: int = Field(ge=0, le=6)
+
+
+def _reject_duplicate_schedule(
+    value: list[InvitationScheduleInput],
+) -> list[InvitationScheduleInput]:
+    keys = [(item.template_id, item.weekday) for item in value]
+    if len(keys) != len(set(keys)):
+        raise ValueError("schedule must not contain duplicates")
+    return value
+
+
 class InvitationCreateRequest(InvitationSchema):
     staff_name: str = Field(min_length=1, max_length=50)
     hourly_wage: int = Field(ge=MINIMUM_HOURLY_WAGE_2026)
+    schedule: list[InvitationScheduleInput] = Field(
+        default_factory=list,
+        max_length=140,
+    )
 
     @field_validator("staff_name")
     @classmethod
@@ -33,6 +51,51 @@ class InvitationCreateRequest(InvitationSchema):
             raise ValueError("staffName must not be blank")
         return name
 
+    @field_validator("schedule")
+    @classmethod
+    def reject_duplicate_schedule(
+        cls, value: list[InvitationScheduleInput]
+    ) -> list[InvitationScheduleInput]:
+        return _reject_duplicate_schedule(value)
+
+
+class InvitationUpdateRequest(InvitationSchema):
+    staff_name: str | None = Field(default=None, min_length=1, max_length=50)
+    hourly_wage: int | None = Field(default=None, ge=MINIMUM_HOURLY_WAGE_2026)
+    schedule: list[InvitationScheduleInput] | None = Field(
+        default=None,
+        max_length=140,
+    )
+
+    @field_validator("staff_name")
+    @classmethod
+    def strip_staff_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        name = value.strip()
+        if not name:
+            raise ValueError("staffName must not be blank")
+        return name
+
+    @field_validator("schedule")
+    @classmethod
+    def reject_duplicate_schedule(
+        cls, value: list[InvitationScheduleInput] | None
+    ) -> list[InvitationScheduleInput] | None:
+        return _reject_duplicate_schedule(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def require_change(self) -> "InvitationUpdateRequest":
+        if not self.model_fields_set:
+            raise ValueError("at least one field must be provided")
+        if "staff_name" in self.model_fields_set and self.staff_name is None:
+            raise ValueError("staffName must not be null")
+        if "hourly_wage" in self.model_fields_set and self.hourly_wage is None:
+            raise ValueError("hourlyWage must not be null")
+        if "schedule" in self.model_fields_set and self.schedule is None:
+            raise ValueError("schedule must not be null")
+        return self
+
 
 class InvitationResponse(InvitationSchema):
     invitation_id: UUID
@@ -40,6 +103,7 @@ class InvitationResponse(InvitationSchema):
     code: str
     staff_name: str
     hourly_wage: int
+    schedule: list[InvitationScheduleInput]
     created_at: datetime
 
 

@@ -3,7 +3,11 @@
 from app.models.assistant_chat import AssistantChat, AssistantMessage
 from app.models.business_verification import BusinessVerification
 from app.models.handover import HandoverItem, HandoverNote
-from app.models.invitation import Invitation, InvitationAttempt
+from app.models.invitation import (
+    Invitation,
+    InvitationAttempt,
+    InvitationScheduleAssignment,
+)
 from app.models.manual import Manual, ManualCategory
 from app.models.membership import Membership
 from app.models.notification import NotificationRead
@@ -12,6 +16,8 @@ from app.models.recipe import Recipe
 from app.models.schedule import (
     ScheduleAssignment,
     ScheduleAssignmentOverride,
+    ScheduleDayOverride,
+    ScheduleDayShift,
     ShiftTemplate,
     SubstituteRequest,
 )
@@ -27,6 +33,7 @@ __all__ = [
     "HandoverNote",
     "Invitation",
     "InvitationAttempt",
+    "InvitationScheduleAssignment",
     "Manual",
     "ManualCategory",
     "Membership",
@@ -34,6 +41,8 @@ __all__ = [
     "OwnerQuestion",
     "Recipe",
     "ScheduleAssignmentOverride",
+    "ScheduleDayOverride",
+    "ScheduleDayShift",
     "ShiftTemplate",
     "Store",
     "SubstituteRequest",

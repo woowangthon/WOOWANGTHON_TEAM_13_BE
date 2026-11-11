@@ -13,6 +13,8 @@ from app.models.membership import Membership
 from app.models.schedule import (
     ScheduleAssignment,
     ScheduleAssignmentOverride,
+    ScheduleDayOverride,
+    ScheduleDayShift,
     ShiftTemplate,
     SubstituteRequest,
 )
@@ -42,6 +44,8 @@ def session() -> Iterator[Session]:
         ScheduleAssignment.__table__,
         SubstituteRequest.__table__,
         ScheduleAssignmentOverride.__table__,
+        ScheduleDayOverride.__table__,
+        ScheduleDayShift.__table__,
     ]
     User.metadata.create_all(engine, tables=tables)
     with Session(engine, expire_on_commit=False) as db_session:
@@ -178,6 +182,48 @@ async def test_schedule_assignment_and_substitute_override_drive_payroll(
         (date(2026, 11, 16), time(10), time(14)),
     ]
     assert shifts[substitute.id] == [(date(2026, 11, 9), time(10), time(14))]
+
+
+async def test_daily_schedule_override_replaces_fixed_shifts_for_payroll(
+    session: Session,
+) -> None:
+    store = add_store(session)
+    original = add_member(session, store)
+    replacement = add_member(session, store)
+    assignment = add_schedule_assignment(session, store, original, weekday=0)
+    changed_day = ScheduleDayOverride(
+        id=uuid4(),
+        store_id=store.id,
+        work_date=date(2026, 11, 9),
+        created_by_user_id=store.owner_id,
+        shifts=[
+            ScheduleDayShift(
+                id=uuid4(),
+                template_id=assignment.template_id,
+                assignee_user_id=replacement.user_id,
+                template=assignment.template,
+            )
+        ],
+    )
+    deleted_day = ScheduleDayOverride(
+        id=uuid4(),
+        store_id=store.id,
+        work_date=date(2026, 11, 16),
+        created_by_user_id=store.owner_id,
+        shifts=[],
+    )
+    session.add_all([changed_day, deleted_day])
+    session.commit()
+
+    shifts = await repository(session).list_published_shift_times(
+        store.id,
+        [original.id, replacement.id],
+        date(2026, 11, 2),
+        date(2026, 11, 16),
+    )
+
+    assert shifts[original.id] == [(date(2026, 11, 2), time(10), time(14))]
+    assert shifts[replacement.id] == [(date(2026, 11, 9), time(10), time(14))]
 
 
 async def test_membership_lookup_by_id_is_scoped_to_store(session: Session) -> None:

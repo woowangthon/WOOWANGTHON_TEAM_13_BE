@@ -63,6 +63,8 @@ def _to_response(store: Store, owner_name: str) -> StoreResponse:
         photo_url=store.photo_url,
         payday=store.payday,
         business_size=cast(BusinessSize | None, store.business_size),
+        closed_weekdays=store.closed_weekdays or [],
+        closed_on_holidays=bool(store.closed_on_holidays),
     )
 
 

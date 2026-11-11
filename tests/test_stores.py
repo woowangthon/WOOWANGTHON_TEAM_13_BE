@@ -44,6 +44,8 @@ class StubStoreService:
             photo_url="https://example.com/store.jpg",
             payday=10,
             business_size="UNDER_FIVE",
+            closed_weekdays=[],
+            closed_on_holidays=False,
         )
         self.deleted = False
         self.reject_verification = False
@@ -64,6 +66,8 @@ class StubStoreService:
             photo_url=request.photo_url,
             payday=request.payday,
             business_size=request.business_size,
+            closed_weekdays=request.closed_weekdays,
+            closed_on_holidays=request.closed_on_holidays,
         )
         return self.store
 
@@ -133,6 +137,8 @@ def test_create_store_uses_camel_case_contract() -> None:
             "photoUrl": "https://example.com/new-store.jpg",
             "payday": 25,
             "businessSize": "FIVE_OR_MORE",
+            "closedWeekdays": [6, 0],
+            "closedOnHolidays": True,
         },
     )
 
@@ -146,6 +152,8 @@ def test_create_store_uses_camel_case_contract() -> None:
         "photoUrl": "https://example.com/new-store.jpg",
         "payday": 25,
         "businessSize": "FIVE_OR_MORE",
+        "closedWeekdays": [0, 6],
+        "closedOnHolidays": True,
     }
 
 
@@ -218,6 +226,8 @@ def test_update_store() -> None:
             "photoUrl": None,
             "payday": 31,
             "businessSize": "UNDER_FIVE",
+            "closedWeekdays": [2, 5],
+            "closedOnHolidays": True,
         },
     )
 
@@ -227,6 +237,8 @@ def test_update_store() -> None:
     assert response.json()["address"] == "서울특별시 강남구 테헤란로 123"
     assert response.json()["payday"] == 31
     assert response.json()["businessSize"] == "UNDER_FIVE"
+    assert response.json()["closedWeekdays"] == [2, 5]
+    assert response.json()["closedOnHolidays"] is True
 
 
 def test_store_accepts_payday_between_1_and_31() -> None:
@@ -263,6 +275,18 @@ def test_store_rejects_invalid_business_size() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_store_rejects_invalid_closed_weekdays() -> None:
+    client, _, store_service = create_client()
+
+    for closed_weekdays in ([0, 0], [-1], [7]):
+        response = client.patch(
+            f"/api/v1/stores/{store_service.store.id}",
+            json={"closedWeekdays": closed_weekdays},
+        )
+
+        assert response.status_code == 422
 
 
 def test_update_store_rejects_empty_body() -> None:

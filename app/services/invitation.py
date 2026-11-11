@@ -7,11 +7,19 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.exc import IntegrityError
 
-from app.models.invitation import Invitation, InvitationAttempt
+from app.models.invitation import (
+    Invitation,
+    InvitationAttempt,
+    InvitationScheduleAssignment,
+)
 from app.models.membership import Membership
 from app.models.store import Store
 from app.models.user import User
-from app.schemas.invitation import InvitationCreateRequest
+from app.schemas.invitation import (
+    InvitationCreateRequest,
+    InvitationScheduleInput,
+    InvitationUpdateRequest,
+)
 
 INVITATION_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 MAX_FAILED_ATTEMPTS = 5
@@ -51,6 +59,10 @@ class InvitationAlreadyAvailableError(Exception):
         self.invitation = invitation
 
 
+class InvalidInvitationScheduleError(Exception):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class VerifiedInvitation:
     invitation: Invitation
@@ -79,6 +91,8 @@ class InvitationRepositoryProtocol(Protocol):
         invitation_id: UUID,
         store_id: UUID,
     ) -> Invitation | None: ...
+
+    async def list_shift_template_ids(self, store_id: UUID) -> set[UUID]: ...
 
     async def get_active_membership(
         self,
@@ -139,6 +153,7 @@ class InvitationService:
         )
         if existing is not None:
             raise InvitationAlreadyAvailableError(existing)
+        await self._validate_schedule(store_id, request.schedule)
 
         for _ in range(10):
             invitation = Invitation(
@@ -147,6 +162,7 @@ class InvitationService:
                 code=self._code_generator(),
                 staff_name=request.staff_name,
                 hourly_wage=request.hourly_wage,
+                schedule=self._schedule_entries(request.schedule),
             )
             try:
                 return await self._repository.create(invitation)
@@ -165,6 +181,49 @@ class InvitationService:
     async def list_for_store(self, store_id: UUID) -> list[Invitation]:
         """소유자 화면에 발급 이력을 최신순으로 반환합니다."""
         return await self._repository.list_by_store_id(store_id)
+
+    async def get(self, store_id: UUID, invitation_id: UUID) -> Invitation:
+        invitation = await self._repository.get_by_id_and_store_id(
+            invitation_id,
+            store_id,
+        )
+        if invitation is None:
+            raise InvitationNotFoundError
+        return invitation
+
+    async def update(
+        self,
+        store_id: UUID,
+        invitation_id: UUID,
+        request: InvitationUpdateRequest,
+    ) -> Invitation:
+        invitation = await self.get(store_id, invitation_id)
+        if invitation.revoked_at is not None or invitation.accepted_at is not None:
+            raise InvitationRevokedError
+        if request.staff_name is not None:
+            existing = await self._repository.get_available_by_store_and_staff_name(
+                store_id,
+                request.staff_name,
+            )
+            if existing is not None and existing.id != invitation.id:
+                raise InvitationAlreadyAvailableError(existing)
+            invitation.staff_name = request.staff_name
+        if request.hourly_wage is not None:
+            invitation.hourly_wage = request.hourly_wage
+        if request.schedule is not None:
+            await self._validate_schedule(store_id, request.schedule)
+            invitation.schedule = self._schedule_entries(request.schedule)
+        target_staff_name = invitation.staff_name
+        try:
+            return await self._repository.save(invitation)
+        except IntegrityError:
+            existing = await self._repository.get_available_by_store_and_staff_name(
+                store_id,
+                target_staff_name,
+            )
+            if existing is not None and existing.id != invitation_id:
+                raise InvitationAlreadyAvailableError(existing) from None
+            raise
 
     async def get_shareable(
         self,
@@ -295,3 +354,26 @@ class InvitationService:
 
         await self._repository.save_attempt(attempt)
         raise InvitationInvalidError(MAX_FAILED_ATTEMPTS - attempt.failure_count)
+
+    async def _validate_schedule(
+        self,
+        store_id: UUID,
+        schedule: list[InvitationScheduleInput],
+    ) -> None:
+        template_ids = {item.template_id for item in schedule}
+        if template_ids:
+            valid_ids = await self._repository.list_shift_template_ids(store_id)
+            if not template_ids <= valid_ids:
+                raise InvalidInvitationScheduleError
+
+    @staticmethod
+    def _schedule_entries(
+        schedule: list[InvitationScheduleInput],
+    ) -> list[InvitationScheduleAssignment]:
+        return [
+            InvitationScheduleAssignment(
+                template_id=item.template_id,
+                weekday=item.weekday,
+            )
+            for item in schedule
+        ]

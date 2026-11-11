@@ -11,11 +11,11 @@ from app.api.v1.stores import get_store_service
 from app.api.v1.users import get_membership_service, get_user_service
 from app.app import app
 from app.core.auth import AuthenticatedUser, get_current_user
-from app.models.invitation import Invitation
+from app.models.invitation import Invitation, InvitationScheduleAssignment
 from app.models.membership import Membership
 from app.models.store import Store
 from app.models.user import User
-from app.schemas.invitation import InvitationCreateRequest
+from app.schemas.invitation import InvitationCreateRequest, InvitationUpdateRequest
 from app.services.invitation import (
     InvitationAlreadyAvailableError,
     InvitationInvalidError,
@@ -64,6 +64,7 @@ class StubInvitationService:
         self.verify_error: Exception | None = None
         self.create_error: Exception | None = None
         self.revoked = False
+        self.template_id = uuid4()
 
     async def create(
         self,
@@ -75,6 +76,36 @@ class StubInvitationService:
             raise self.create_error
         self.invitation.staff_name = request.staff_name
         self.invitation.hourly_wage = request.hourly_wage
+        self.invitation.schedule = [
+            InvitationScheduleAssignment(
+                template_id=item.template_id,
+                weekday=item.weekday,
+            )
+            for item in request.schedule
+        ]
+        return self.invitation
+
+    async def get(self, store_id: UUID, invitation_id: UUID) -> Invitation:
+        return self.invitation
+
+    async def update(
+        self,
+        store_id: UUID,
+        invitation_id: UUID,
+        request: InvitationUpdateRequest,
+    ) -> Invitation:
+        if request.staff_name is not None:
+            self.invitation.staff_name = request.staff_name
+        if request.hourly_wage is not None:
+            self.invitation.hourly_wage = request.hourly_wage
+        if request.schedule is not None:
+            self.invitation.schedule = [
+                InvitationScheduleAssignment(
+                    template_id=item.template_id,
+                    weekday=item.weekday,
+                )
+                for item in request.schedule
+            ]
         return self.invitation
 
     async def verify(self, code: str, user_id: UUID) -> VerifiedInvitation:
@@ -231,6 +262,7 @@ def test_invitation_routes_are_registered() -> None:
         "/api/v1/stores/{store_id}/invitations/{invitation_id}/share-info"
         in paths
     )
+    assert "/api/v1/stores/{store_id}/invitations/{invitation_id}" in paths
 
 
 def test_owner_creates_invitation() -> None:
@@ -248,6 +280,7 @@ def test_owner_creates_invitation() -> None:
         "code": "K7P2QX",
         "staffName": "지은",
         "hourlyWage": 10_320,
+        "schedule": [],
         "createdAt": service.invitation.created_at.isoformat().replace(
             "+00:00",
             "Z",
@@ -296,6 +329,35 @@ def test_owner_lists_invitations_with_status() -> None:
     assert response.status_code == 200
     assert response.json()["invitations"][0]["status"] == "AVAILABLE"
     assert response.json()["invitations"][0]["code"] == "K7P2QX"
+
+
+def test_owner_creates_gets_and_updates_invitation_schedule() -> None:
+    client, service = create_client()
+    schedule = [{"templateId": str(service.template_id), "weekday": 2}]
+
+    created = client.post(
+        f"/api/v1/stores/{service.store.id}/invitations",
+        json={
+            "staffName": "지은",
+            "hourlyWage": 10_320,
+            "schedule": schedule,
+        },
+    )
+    fetched = client.get(
+        f"/api/v1/stores/{service.store.id}/invitations/{service.invitation.id}"
+    )
+    updated = client.patch(
+        f"/api/v1/stores/{service.store.id}/invitations/{service.invitation.id}",
+        json={"schedule": [{"templateId": str(service.template_id), "weekday": 4}]},
+    )
+
+    assert created.status_code == 201
+    assert created.json()["schedule"] == schedule
+    assert fetched.json()["schedule"] == schedule
+    assert updated.status_code == 200
+    assert updated.json()["schedule"] == [
+        {"templateId": str(service.template_id), "weekday": 4}
+    ]
 
 
 def test_owner_gets_invitation_share_info() -> None:

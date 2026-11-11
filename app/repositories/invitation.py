@@ -1,11 +1,13 @@
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.invitation import Invitation, InvitationAttempt
 from app.models.membership import Membership
+from app.models.schedule import ScheduleAssignment, ShiftTemplate
 from app.models.store import Store
 from app.models.user import User
 
@@ -24,11 +26,15 @@ class InvitationRepository:
             await self._session.rollback()
             raise
         await self._session.refresh(invitation)
-        return invitation
+        return (
+            await self.get_by_id_and_store_id(invitation.id, invitation.store_id)
+            or invitation
+        )
 
     async def get_context_by_code(self, code: str) -> InvitationContext | None:
         query = (
             select(Invitation, Store, User)
+            .options(selectinload(Invitation.schedule))
             .join(Store, Store.id == Invitation.store_id)
             .join(User, User.id == Store.owner_id)
             .where(Invitation.code == code)
@@ -42,6 +48,7 @@ class InvitationRepository:
     async def list_by_store_id(self, store_id: UUID) -> list[Invitation]:
         query = (
             select(Invitation)
+            .options(selectinload(Invitation.schedule))
             .where(Invitation.store_id == store_id)
             .order_by(Invitation.created_at.desc(), Invitation.id.desc())
         )
@@ -67,12 +74,21 @@ class InvitationRepository:
         invitation_id: UUID,
         store_id: UUID,
     ) -> Invitation | None:
-        query = select(Invitation).where(
-            Invitation.id == invitation_id,
-            Invitation.store_id == store_id,
+        query = (
+            select(Invitation)
+            .options(selectinload(Invitation.schedule))
+            .where(
+                Invitation.id == invitation_id,
+                Invitation.store_id == store_id,
+            )
         )
         result = await self._session.execute(query)
         return result.scalar_one_or_none()
+
+    async def list_shift_template_ids(self, store_id: UUID) -> set[UUID]:
+        query = select(ShiftTemplate.id).where(ShiftTemplate.store_id == store_id)
+        result = await self._session.execute(query)
+        return set(result.scalars().all())
 
     async def get_active_membership(
         self,
@@ -123,6 +139,24 @@ class InvitationRepository:
             await self._session.rollback()
             return None
 
+        await self._session.execute(
+            delete(ScheduleAssignment).where(
+                ScheduleAssignment.store_id == invitation.store_id,
+                ScheduleAssignment.assignee_user_id == membership.user_id,
+            )
+        )
+        self._session.add_all(
+            [
+                ScheduleAssignment(
+                    store_id=invitation.store_id,
+                    template_id=item.template_id,
+                    weekday=item.weekday,
+                    assignee_user_id=membership.user_id,
+                )
+                for item in invitation.schedule
+            ]
+        )
+
         self._session.add(membership)
         try:
             await self._session.commit()
@@ -140,7 +174,10 @@ class InvitationRepository:
             await self._session.rollback()
             raise
         await self._session.refresh(invitation)
-        return invitation
+        return (
+            await self.get_by_id_and_store_id(invitation.id, invitation.store_id)
+            or invitation
+        )
 
     async def get_attempt(self, user_id: UUID) -> InvitationAttempt | None:
         return await self._session.get(InvitationAttempt, user_id)

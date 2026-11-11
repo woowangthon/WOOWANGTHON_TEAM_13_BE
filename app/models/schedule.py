@@ -26,6 +26,9 @@ class ShiftTemplate(Base):
     __tablename__ = "shift_templates"
     __table_args__ = (
         CheckConstraint("end_time > start_time", name="ck_shift_template_time"),
+        CheckConstraint(
+            "headcount BETWEEN 1 AND 10", name="ck_shift_templates_headcount"
+        ),
         UniqueConstraint("store_id", "name", name="uq_shift_templates_store_name"),
     )
 
@@ -40,6 +43,9 @@ class ShiftTemplate(Base):
     start_time: Mapped[time] = mapped_column(Time, nullable=False)
     end_time: Mapped[time] = mapped_column(Time, nullable=False)
     role: Mapped[str] = mapped_column(String(50), default="", nullable=False)
+    headcount: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -131,6 +137,87 @@ class ScheduleAssignmentOverride(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class ScheduleDayOverride(Base):
+    """사장님이 특정 날짜의 근무 목록을 직접 교체한 기록입니다."""
+
+    __tablename__ = "schedule_day_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "store_id",
+            "work_date",
+            name="uq_schedule_day_overrides_store_date",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    store_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("stores.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    work_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    shifts: Mapped[list["ScheduleDayShift"]] = relationship(
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="ScheduleDayShift.id",
+    )
+
+
+class ScheduleDayShift(Base):
+    """날짜별 교체 목록 안의 실제 근무 한 건입니다."""
+
+    __tablename__ = "schedule_day_shifts"
+    __table_args__ = (
+        UniqueConstraint(
+            "day_override_id",
+            "template_id",
+            "assignee_user_id",
+            name="uq_schedule_day_shifts_override_template_assignee",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    day_override_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("schedule_day_overrides.id", ondelete="CASCADE"),
+        index=True,
+        nullable=False,
+    )
+    template_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("shift_templates.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
+    )
+    assignee_user_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        index=True,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    template: Mapped[ShiftTemplate] = relationship(lazy="joined")
 
 
 class SubstituteRequest(Base):

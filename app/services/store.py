@@ -68,12 +68,15 @@ class StoreService:
             photo_url=request.photo_url,
             payday=request.payday,
             business_size=request.business_size,
+            closed_weekdays=request.closed_weekdays,
+            closed_on_holidays=request.closed_on_holidays,
             shift_templates=[
                 ShiftTemplate(
                     name=item.name,
                     start_time=self._parse_time(item.start),
                     end_time=self._parse_time(item.end),
                     role=item.role,
+                    headcount=item.headcount,
                     sort_order=item.sort_order,
                 )
                 for item in request.shift_templates
