@@ -18,6 +18,7 @@ from app.models.schedule import (
 from app.models.user import User
 from app.repositories.membership import MembershipRepository
 from app.repositories.schedule import ScheduleRepository
+from app.repositories.schedule_change import ScheduleChangeRepository
 from app.repositories.store import StoreRepository
 from app.schemas.schedule import (
     CalendarShiftResponse,
@@ -66,6 +67,7 @@ def get_schedule_service(
     return ScheduleService(
         ScheduleRepository(session),
         StoreAccessService(StoreRepository(session), memberships),
+        change_recorder=ScheduleChangeRepository(session),
     )
 
 

@@ -1,21 +1,23 @@
-from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from uuid import UUID, uuid4
 
 import pytest
 
 from app.services.notification import (
+    DAILY_SCHEDULE_CHANGED,
     HANDOVER_CREATED,
     MAX_NOTIFICATIONS,
     OWNER_ANSWERED,
     OWNER_QUESTION_ASKED,
     SEOUL,
     SUBSTITUTE_ACCEPTED,
+    SUBSTITUTE_REJECTED,
     SUBSTITUTE_REQUESTED,
     AnswerEvent,
     HandoverEvent,
     NotificationService,
     QuestionEvent,
+    ScheduleChangeEvent,
     SubstituteEvent,
     UncheckedItem,
     Viewer,
@@ -41,6 +43,8 @@ class FakeRepository:
     def __init__(self) -> None:
         self.received: list[SubstituteEvent] = []
         self.accepted: list[SubstituteEvent] = []
+        self.rejected: list[SubstituteEvent] = []
+        self.changes: list[ScheduleChangeEvent] = []
         self.answers: list[AnswerEvent] = []
         self.handovers: list[HandoverEvent] = []
         self.questions: list[QuestionEvent] = []
@@ -74,6 +78,16 @@ class FakeRepository:
     ) -> list[SubstituteEvent]:
         return self.accepted
 
+    async def list_rejected_substitutes(
+        self, store_id: UUID, user_id: UUID, since: datetime
+    ) -> list[SubstituteEvent]:
+        return self.rejected
+
+    async def list_schedule_changes(
+        self, store_id: UUID, user_id: UUID, since: datetime
+    ) -> list[ScheduleChangeEvent]:
+        return self.changes
+
     async def list_answered_questions(
         self, store_id: UUID, user_id: UUID, since: datetime
     ) -> list[AnswerEvent]:
@@ -106,17 +120,17 @@ class FakeRepository:
 class FakeShifts:
     def __init__(self) -> None:
         self.shifts: list[tuple[date, time, time]] = []
-        self.asked: tuple[list[UUID], date, date] | None = None
+        self.asked: tuple[UUID, date, date] | None = None
 
-    async def list_published_shift_times(
+    async def list_user_shift_times(
         self,
         store_id: UUID,
-        membership_ids: Sequence[UUID],
+        user_id: UUID,
         start_date: date,
         end_date: date,
-    ) -> dict[UUID, list[tuple[date, time, time]]]:
-        self.asked = (list(membership_ids), start_date, end_date)
-        return {MEMBERSHIP_ID: self.shifts}
+    ) -> list[tuple[date, time, time]]:
+        self.asked = (user_id, start_date, end_date)
+        return self.shifts
 
 
 class Harness:
@@ -206,8 +220,64 @@ async def test_owner_feed_has_handovers_and_questions(harness: Harness) -> None:
     assert handover_item.body.endswith("…")
     assert len(handover_item.body) <= 61
     assert harness.repository.handover_excluded == OWNER_ID
+
+
+async def test_owner_gets_banner_before_own_shift(harness: Harness) -> None:
+    harness.shifts.shifts = [(TODAY, time(9), time(15))]
+    harness.repository.unchecked = [unchecked_item("우유 2팩 채우기")]
+
+    feed = await harness.service.feed(STORE_ID, OWNER_ID)
+
+    assert feed.banner is not None
+    assert (feed.banner.start_time, feed.banner.end_time) == (time(9), time(15))
+    assert [item.text for item in feed.banner.items] == ["우유 2팩 채우기"]
+    assert harness.shifts.asked == (OWNER_ID, TODAY, TODAY)
+
+
+async def test_owner_without_shift_has_no_banner(harness: Harness) -> None:
+    feed = await harness.service.feed(STORE_ID, OWNER_ID)
+
     assert feed.banner is None
-    assert harness.shifts.asked is None
+    assert harness.repository.unchecked_range is None
+
+
+async def test_staff_feed_has_rejected_substitute(harness: Harness) -> None:
+    rejected = substitute("지은", 3)
+    harness.repository.rejected = [rejected]
+
+    feed = await harness.service.feed(STORE_ID, STAFF_ID)
+
+    (item,) = feed.notifications
+    assert item.type == SUBSTITUTE_REJECTED
+    assert item.notification_id == f"SUBSTITUTE_REJECTED:{rejected.request_id}"
+    assert item.title == "대타 요청이 거절됐어요"
+    assert item.body == "지은님이 11/14(토) 09:00~15:00 근무 대타를 거절했어요"
+    assert item.target_kind == "substitute_request"
+    assert item.target_id == rejected.request_id
+
+
+async def test_staff_feed_has_daily_schedule_changes(harness: Harness) -> None:
+    work_date = date(2026, 11, 18)
+    added = ScheduleChangeEvent(uuid4(), work_date, "ADDED", "오픈 10:00~13:00", at(3))
+    removed = ScheduleChangeEvent(
+        uuid4(), work_date, "REMOVED", "마감 18:00~22:00", at(2)
+    )
+    changed = ScheduleChangeEvent(
+        uuid4(), work_date, "CHANGED", "오픈 10:00~13:00", at(1)
+    )
+    harness.repository.changes = [added, removed, changed]
+
+    feed = await harness.service.feed(STORE_ID, STAFF_ID)
+
+    assert [item.type for item in feed.notifications] == [DAILY_SCHEDULE_CHANGED] * 3
+    assert [item.body for item in feed.notifications] == [
+        "11/18(수) 근무가 바뀌었어요 · 오픈 10:00~13:00",
+        "11/18(수) 근무가 빠졌어요 · 마감 18:00~22:00",
+        "11/18(수) 근무가 생겼어요 · 오픈 10:00~13:00",
+    ]
+    assert feed.notifications[0].title == "근무가 바뀌었어요"
+    assert feed.notifications[0].target_kind == "daily_schedule"
+    assert feed.notifications[0].target_id == changed.notice_id
 
 
 async def test_stranger_gets_not_found(harness: Harness) -> None:
@@ -270,7 +340,7 @@ async def test_banner_shows_unchecked_items_30_minutes_before_shift() -> None:
     assert (feed.banner.start_time, feed.banner.end_time) == (time(9), time(15))
     assert feed.banner.starts_at == datetime(2026, 11, 12, 9, tzinfo=SEOUL)
     assert [item.text for item in feed.banner.items] == ["우유 2팩 채우기"]
-    assert harness.shifts.asked == ([MEMBERSHIP_ID], TODAY, TODAY)
+    assert harness.shifts.asked == (STAFF_ID, TODAY, TODAY)
     assert harness.repository.unchecked_range == (TODAY - timedelta(days=7), TODAY)
 
 
@@ -294,7 +364,7 @@ async def test_banner_uses_korean_date_near_midnight_utc() -> None:
     feed = await harness.service.feed(STORE_ID, STAFF_ID)
 
     assert feed.banner is not None
-    assert harness.shifts.asked == ([MEMBERSHIP_ID], TODAY, TODAY)
+    assert harness.shifts.asked == (STAFF_ID, TODAY, TODAY)
 
 
 def test_find_banner_shift_picks_current_or_next_shift() -> None:

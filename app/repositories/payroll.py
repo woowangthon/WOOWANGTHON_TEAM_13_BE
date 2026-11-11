@@ -3,6 +3,7 @@ from collections.abc import Sequence
 from datetime import date, time, timedelta
 from uuid import UUID
 
+import holidays
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -92,7 +93,7 @@ class PayrollRepository:
         start_date: date,
         end_date: date,
     ) -> dict[UUID, list[tuple[date, time, time]]]:
-        """고정 스케줄, 대타, 사장님 날짜별 조정을 합쳐 조회합니다."""
+        """고정 스케줄, 대타, 날짜별 조정, 매장 휴무를 합쳐 구성원별로 조회합니다."""
         shifts: dict[UUID, list[tuple[date, time, time]]] = defaultdict(list)
         if not membership_ids:
             return shifts
@@ -105,12 +106,50 @@ class PayrollRepository:
             )
         ).all()
         member_by_user = {user_id: member_id for member_id, user_id in member_rows}
+        by_user = await self._shift_times_by_user(store_id, start_date, end_date)
+        for user_id, member_id in member_by_user.items():
+            if user_id in by_user:
+                shifts[member_id] = by_user[user_id]
+        return shifts
+
+    async def list_user_shift_times(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        start_date: date,
+        end_date: date,
+    ) -> list[tuple[date, time, time]]:
+        """사장님을 포함한 사용자 한 명의 기간 안 근무를 조회합니다."""
+        by_user = await self._shift_times_by_user(store_id, start_date, end_date)
+        return by_user.get(user_id, [])
+
+    async def _store_closure(self, store_id: UUID) -> tuple[set[int], bool]:
+        """매장의 쉬는 요일과 공휴일 휴무 여부를 조회합니다."""
+        row = (
+            await self._session.execute(
+                select(Store.closed_weekdays, Store.closed_on_holidays).where(
+                    Store.id == store_id
+                )
+            )
+        ).one_or_none()
+        if row is None:
+            return set(), False
+        return set(row[0] or []), bool(row[1])
+
+    async def _shift_times_by_user(
+        self,
+        store_id: UUID,
+        start_date: date,
+        end_date: date,
+    ) -> dict[UUID, list[tuple[date, time, time]]]:
+        """달력과 같은 규칙으로 사용자별 근무를 계산합니다."""
+        shifts: dict[UUID, list[tuple[date, time, time]]] = defaultdict(list)
         schedule_assignments = list(
             (
                 await self._session.execute(
-                    select(ScheduleAssignment).where(
-                        ScheduleAssignment.store_id == store_id
-                    )
+                    select(ScheduleAssignment)
+                    .options(selectinload(ScheduleAssignment.template))
+                    .where(ScheduleAssignment.store_id == store_id)
                 )
             )
             .scalars()
@@ -134,61 +173,58 @@ class PayrollRepository:
             .scalars()
             .all()
         )
-        if schedule_assignments or day_overrides:
-            overrides = (
-                await self._session.execute(
-                    select(ScheduleAssignmentOverride).where(
-                        ScheduleAssignmentOverride.schedule_assignment_id.in_(
-                            [item.id for item in schedule_assignments]
-                        ),
-                        ScheduleAssignmentOverride.work_date.between(
-                            start_date,
-                            end_date,
-                        ),
-                    )
+        if not schedule_assignments and not day_overrides:
+            return shifts
+        overrides = (
+            await self._session.execute(
+                select(ScheduleAssignmentOverride).where(
+                    ScheduleAssignmentOverride.schedule_assignment_id.in_(
+                        [item.id for item in schedule_assignments]
+                    ),
+                    ScheduleAssignmentOverride.work_date.between(start_date, end_date),
                 )
-            ).scalars()
-            override_map = {
-                (item.schedule_assignment_id, item.work_date): item.assignee_user_id
-                for item in overrides
-            }
-            day_override_map = {item.work_date: item for item in day_overrides}
-            cursor = start_date
-            while cursor <= end_date:
-                day_override = day_override_map.get(cursor)
-                if day_override is not None:
-                    for shift in day_override.shifts:
-                        member_id = member_by_user.get(shift.assignee_user_id)
-                        if member_id is None:
-                            continue
-                        shifts[member_id].append(
-                            (
-                                cursor,
-                                shift.start_time or shift.template.start_time,
-                                shift.end_time or shift.template.end_time,
-                            )
+            )
+        ).scalars()
+        override_map = {
+            (item.schedule_assignment_id, item.work_date): item.assignee_user_id
+            for item in overrides
+        }
+        day_override_map = {item.work_date: item for item in day_overrides}
+        closed_weekdays, closed_on_holidays = await self._store_closure(store_id)
+        korean_holidays = (
+            holidays.KR(years=range(start_date.year, end_date.year + 1))
+            if closed_on_holidays
+            else {}
+        )
+        cursor = start_date
+        while cursor <= end_date:
+            day_override = day_override_map.get(cursor)
+            if day_override is not None:
+                for shift in day_override.shifts:
+                    shifts[shift.assignee_user_id].append(
+                        (
+                            cursor,
+                            shift.start_time or shift.template.start_time,
+                            shift.end_time or shift.template.end_time,
                         )
-                    cursor += timedelta(days=1)
-                    continue
+                    )
+            elif cursor.weekday() not in closed_weekdays and (
+                cursor not in korean_holidays
+            ):
                 for assignment in schedule_assignments:
                     if assignment.weekday != cursor.weekday():
                         continue
                     user_id = override_map.get(
                         (assignment.id, cursor), assignment.assignee_user_id
                     )
-                    member_id = member_by_user.get(user_id)
-                    if member_id is None:
-                        continue
-                    shifts[member_id].append(
+                    shifts[user_id].append(
                         (
                             cursor,
                             assignment.template.start_time,
                             assignment.template.end_time,
                         )
                     )
-                cursor += timedelta(days=1)
-            for member_shifts in shifts.values():
-                member_shifts.sort(key=lambda item: (item[0], item[1], item[2]))
-            return shifts
-
+            cursor += timedelta(days=1)
+        for user_shifts in shifts.values():
+            user_shifts.sort(key=lambda item: (item[0], item[1], item[2]))
         return shifts

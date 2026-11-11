@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -25,7 +26,14 @@ from app.schemas.schedule import (
     ShiftTemplateCreateRequest,
     ShiftTemplateUpdateRequest,
 )
+from app.services.schedule_change import (
+    DayShift,
+    ScheduleChangeRecorderProtocol,
+    diff_day_shifts,
+)
 from app.services.store_access import StoreAccessProtocol
+
+logger = logging.getLogger(__name__)
 
 SEOUL = ZoneInfo("Asia/Seoul")
 
@@ -184,11 +192,13 @@ class ScheduleService:
         store_access: StoreAccessProtocol,
         clock: Callable[[], datetime] | None = None,
         holiday_checker: Callable[[date], bool] | None = None,
+        change_recorder: ScheduleChangeRecorderProtocol | None = None,
     ) -> None:
         self._repository = repository
         self._store_access = store_access
         self._clock = clock or (lambda: datetime.now(UTC))
         self._holiday_checker = holiday_checker or _is_korean_holiday
+        self._change_recorder = change_recorder
 
     async def workers(self, store_id: UUID, user_id: UUID) -> list[ScheduleWorker]:
         await self._store_access.ensure_member(store_id, user_id)
@@ -317,6 +327,7 @@ class ScheduleService:
         if any(item.assignee_user_id not in workers for item in inputs):
             raise InvalidScheduleWorkerError
         self._validate_daily_conflicts(inputs, templates)
+        before = await self._day_shifts(store_id, user_id, work_date)
         override = await self._repository.replace_day_override(
             store_id,
             work_date,
@@ -332,6 +343,7 @@ class ScheduleService:
             ],
             self._clock(),
         )
+        await self._record_changes(store_id, user_id, work_date, before)
         return override, workers
 
     async def reset_daily_schedule(
@@ -344,7 +356,43 @@ class ScheduleService:
         override = await self._repository.get_day_override(store_id, work_date)
         if override is None:
             raise DailyScheduleNotFoundError
+        before = await self._day_shifts(store_id, user_id, work_date)
         await self._repository.delete_day_override(override)
+        await self._record_changes(store_id, user_id, work_date, before)
+
+    async def _day_shifts(
+        self, store_id: UUID, user_id: UUID, work_date: date
+    ) -> list[DayShift]:
+        """근무 변경 알림을 위해 달력 기준 그날 근무를 읽습니다."""
+        if self._change_recorder is None:
+            return []
+        occurrences, _ = await self.calendar(store_id, user_id, work_date, work_date)
+        return [
+            DayShift(
+                start_time=item.start_time,
+                end_time=item.end_time,
+                name=item.template.name,
+                assignee_user_id=item.assignee_user_id,
+            )
+            for item in occurrences
+        ]
+
+    async def _record_changes(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        work_date: date,
+        before: list[DayShift],
+    ) -> None:
+        """바뀐 근무를 비교해 알림 기록을 남기고, 실패해도 근무 변경은 유지합니다."""
+        if self._change_recorder is None:
+            return
+        try:
+            after = await self._day_shifts(store_id, user_id, work_date)
+            changes = diff_day_shifts(before, after, user_id)
+            await self._change_recorder.record(store_id, work_date, changes)
+        except Exception:
+            logger.exception("failed to record daily schedule change notices")
 
     async def calendar(
         self,

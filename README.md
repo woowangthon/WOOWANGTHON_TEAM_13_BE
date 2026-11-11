@@ -461,11 +461,15 @@ Gemini가 질문과 답변을 매뉴얼 제목·본문 초안(`{ "title", "body"
 | `PATCH` | `/api/v1/stores/{storeId}/handover-notes/{noteId}` | 수정 |
 | `DELETE` | `/api/v1/stores/{storeId}/handover-notes/{noteId}` | 삭제 |
 | `POST` | `/api/v1/stores/{storeId}/handover-notes/{noteId}/confirmations` | 항목 또는 노트 전체 체크 |
+| `GET` | `/api/v1/stores/{storeId}/handover-summary?date=YYYY-MM-DD` | 그날 인수인계 전체 AI 요약 (`{ date, summary, noteCount }`, 저장 안 함) |
+
+- 하루 요약은 인수인계가 없으면 AI를 부르지 않고 `summary: null`입니다. 그날 인수인계 내용이 그대로면
+  서버 메모리에 둔 요약을 다시 써서 Gemini 호출을 줄입니다(체크 상태만 바뀐 경우 포함).
 
 ## 알림 API
 
-알림 테이블을 따로 두지 않고, 목록을 조회할 때 기존 데이터(대타 요청, 사장님께 물어보기,
-인수인계)를 모아 최근 14일 알림을 최신 순으로 최대 50개 반환합니다. 서버 예약 작업이
+목록을 조회할 때 기존 데이터(대타 요청, 사장님께 물어보기, 인수인계)와 하루 근무 변경 기록을
+모아 최근 14일 알림을 최신 순으로 최대 50개 반환합니다. 서버 예약 작업이
 없어서 서버가 잠들어도 동작합니다. 휴대폰 푸시는 없고 앱 안 알림입니다.
 
 | Method | 경로 | 설명 |
@@ -477,14 +481,18 @@ Gemini가 질문과 답변을 매뉴얼 제목·본문 초안(`{ "title", "body"
 | --- | --- | --- | --- |
 | 알바생 | `SUBSTITUTE_REQUESTED` | 나에게 온 대타 요청 (취소 제외) | `substitute_request` |
 | 알바생 | `SUBSTITUTE_ACCEPTED` | 내가 보낸 대타 요청을 상대가 수락 | `substitute_request` |
+| 알바생 | `SUBSTITUTE_REJECTED` | 내가 보낸 대타 요청을 상대가 거절 | `substitute_request` |
+| 알바생 | `DAILY_SCHEDULE_CHANGED` | 사장님이 하루 근무를 바꿔 내 근무가 생기거나 빠지거나 바뀜 | `daily_schedule` |
 | 알바생 | `OWNER_ANSWERED` | 사장님이 내 질문에 답함 | `assistant_chat` |
 | 사장님 | `HANDOVER_CREATED` | 다른 사람이 인수인계를 남김 | `handover` |
 | 사장님 | `OWNER_QUESTION_ASKED` | 알바생이 질문을 넘김 | `owner_question` |
 
 - 읽음은 알림 화면을 연 시각 하나로 관리합니다. 그 시각 이전 알림은 `isRead: true`입니다.
-- `banner`는 알바생에게만 내려갑니다. 오늘(한국 시간) 근무 시작 30분 전부터 퇴근 전까지,
+- `banner`는 근무가 있는 알바생과 사장님에게 내려갑니다. 오늘(한국 시간) 근무 시작 30분 전부터 퇴근 전까지,
   최근 7일 인수인계 중 아직 체크되지 않은 항목을 담습니다. 그 밖의 시간에는 `null`입니다.
-- 근무 시간은 고정 스케줄과 대타로 바뀐 날짜별 담당자를 반영합니다.
+- 근무 시간은 고정 스케줄, 대타, 사장님의 하루 근무 조정, 매장 쉬는 날을 근무표 달력과 같은 규칙으로 반영합니다.
+- 하루 근무 변경 알림은 `PUT`·`DELETE /schedule-calendar/{workDate}` 때 바뀌기 전후 근무를 비교해
+  `schedule_change_notices`에 기록합니다. 바꾼 사장님 본인에게는 가지 않습니다.
 - 사장님이나 재직 중인 구성원이 아니면 `404`입니다.
 
 ## 예상 급여 API
@@ -499,6 +507,8 @@ Gemini가 질문과 답변을 매뉴얼 제목·본문 초안(`{ "title", "body"
 | `GET` | `/api/v1/stores/{storeId}/payroll/estimates?month=YYYY-MM` | 직원별 예상 급여 목록 (사장님) |
 | `GET` | `/api/v1/stores/{storeId}/payroll/estimates/{estimateId}?month=YYYY-MM` | 예상 급여 상세 |
 
+- 근무 시간은 근무표 달력과 같은 규칙으로 계산합니다. 매장 쉬는 요일과 공휴일 휴무일의 고정 근무는 빠지고,
+  사장님이 그날 따로 정한 근무는 들어갑니다.
 - 예상 급여는 저장하지 않고 조회할 때 계산합니다. 그래서 `estimateId`는 구성원 ID(`memberId`)와 같습니다.
 - `estimates/me`는 재직 중인 알바생만 조회할 수 있고, 구성원이 아닌 사장님은 `403`을 받습니다.
 - 목록은 사장님만 조회할 수 있으며 재직 중인 직원 전체를 가입 순서로, 근무가 없는 직원도 0원으로 반환합니다.

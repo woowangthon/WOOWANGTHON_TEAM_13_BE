@@ -25,6 +25,7 @@ from app.schemas.handover import (
     HandoverNoteListResponse,
     HandoverNoteResponse,
     HandoverNoteUpdateRequest,
+    HandoverSummaryResponse,
     HandoverUser,
 )
 from app.services.handover import (
@@ -165,6 +166,21 @@ async def list_handover_notes(
         date=target,
         notes=[_to_response(note) for note in notes],
     )
+
+
+@router.get("/handover-summary", response_model=HandoverSummaryResponse)
+async def get_handover_summary(
+    store_id: UUID,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[HandoverService, Depends(get_handover_service)],
+    work_date: Annotated[date | None, Query(alias="date")] = None,
+) -> HandoverSummaryResponse:
+    """그날 인수인계 전체를 AI로 요약하고, 없으면 summary를 null로 줍니다."""
+    with _translate_errors():
+        target, summary, count = await service.summarize_day(
+            store_id, user.id, work_date
+        )
+    return HandoverSummaryResponse(date=target, summary=summary, note_count=count)
 
 
 @router.get("/handover-notes/{note_id}", response_model=HandoverNoteResponse)

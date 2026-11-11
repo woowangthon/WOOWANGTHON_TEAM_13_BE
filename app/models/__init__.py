@@ -10,7 +10,7 @@ from app.models.invitation import (
 )
 from app.models.manual import Manual, ManualCategory
 from app.models.membership import Membership
-from app.models.notification import NotificationRead
+from app.models.notification import NotificationRead, ScheduleChangeNotice
 from app.models.owner_question import OwnerQuestion
 from app.models.recipe import Recipe
 from app.models.schedule import (
@@ -38,6 +38,7 @@ __all__ = [
     "ManualCategory",
     "Membership",
     "NotificationRead",
+    "ScheduleChangeNotice",
     "OwnerQuestion",
     "Recipe",
     "ScheduleAssignmentOverride",

@@ -107,6 +107,19 @@ class StubHandoverService:
         self.seen_date = work_date
         return work_date or date(2026, 11, 20), [self.note]
 
+    async def summarize_day(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        work_date: date | None,
+    ) -> tuple[date, str | None, int]:
+        self._raise_if_needed()
+        self.seen_date = work_date
+        target = work_date or date(2026, 11, 20)
+        if target == date(2026, 11, 21):
+            return target, None, 0
+        return target, "우유가 2팩 남았어요.", 2
+
     async def get(
         self,
         store_id: UUID,
@@ -166,6 +179,42 @@ def test_handover_routes_are_registered_in_application() -> None:
     assert "/api/v1/stores/{store_id}/handover-notes" in paths
     assert "/api/v1/stores/{store_id}/handover-notes/{note_id}" in paths
     assert "/api/v1/stores/{store_id}/handover-notes/{note_id}/confirmations" in paths
+    assert "/api/v1/stores/{store_id}/handover-summary" in paths
+
+
+def test_handover_summary_returns_contract_shape() -> None:
+    client, service = make_client()
+
+    response = client.get(
+        f"/stores/{STORE_ID}/handover-summary", params={"date": "2026-11-20"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "date": "2026-11-20",
+        "summary": "우유가 2팩 남았어요.",
+        "noteCount": 2,
+    }
+    assert service.seen_date == date(2026, 11, 20)
+
+
+def test_handover_summary_is_null_without_notes() -> None:
+    client, _ = make_client()
+
+    response = client.get(
+        f"/stores/{STORE_ID}/handover-summary", params={"date": "2026-11-21"}
+    )
+
+    assert response.json() == {"date": "2026-11-21", "summary": None, "noteCount": 0}
+
+
+def test_handover_summary_ai_failure_returns_503() -> None:
+    client, service = make_client()
+    service.error = LLMError()
+
+    response = client.get(f"/stores/{STORE_ID}/handover-summary")
+
+    assert response.status_code == 503
 
 
 def test_create_draft() -> None:
