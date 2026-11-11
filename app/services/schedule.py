@@ -11,6 +11,7 @@ import holidays
 from app.models.schedule import (
     ScheduleAssignment,
     ScheduleAssignmentOverride,
+    ScheduleDayOverride,
     ShiftTemplate,
     SubstituteRequest,
 )
@@ -19,6 +20,7 @@ from app.repositories.schedule import (
     WorkerRecord,
 )
 from app.schemas.schedule import (
+    DailyScheduleShiftInput,
     ScheduleAssignmentInput,
     ShiftTemplateCreateRequest,
     ShiftTemplateUpdateRequest,
@@ -60,12 +62,31 @@ class SubstitutePastDateError(Exception):
     pass
 
 
+class DailyScheduleNotFoundError(Exception):
+    pass
+
+
+class DailyScheduleConflictError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class ScheduleWorker:
     user_id: UUID
     member_id: UUID | None
     name: str
     role: Literal["owner", "staff"]
+
+
+@dataclass(frozen=True)
+class CalendarOccurrence:
+    assignment_id: UUID | None
+    daily_shift_id: UUID | None
+    template: ShiftTemplate
+    work_date: date
+    assignee_user_id: UUID
+    substituted: bool
+    manually_adjusted: bool
 
 
 class ScheduleRepositoryProtocol(Protocol):
@@ -91,6 +112,21 @@ class ScheduleRepositoryProtocol(Protocol):
     async def get_override(
         self, assignment_id: UUID, work_date: date
     ) -> ScheduleAssignmentOverride | None: ...
+    async def list_day_overrides(
+        self, store_id: UUID, start_date: date, end_date: date
+    ) -> list[ScheduleDayOverride]: ...
+    async def get_day_override(
+        self, store_id: UUID, work_date: date
+    ) -> ScheduleDayOverride | None: ...
+    async def replace_day_override(
+        self,
+        store_id: UUID,
+        work_date: date,
+        created_by_user_id: UUID,
+        shifts: list[tuple[UUID, UUID]],
+        cancelled_at: datetime,
+    ) -> ScheduleDayOverride: ...
+    async def delete_day_override(self, override: ScheduleDayOverride) -> None: ...
     async def find_pending_request(
         self, assignment_id: UUID, work_date: date
     ) -> SubstituteRequest | None: ...
@@ -262,6 +298,44 @@ class ScheduleService:
         workers = {item.user_id: item for item in await self._workers(store_id)}
         return await self._repository.list_assignments(store_id), workers
 
+    async def replace_daily_schedule(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        work_date: date,
+        inputs: list[DailyScheduleShiftInput],
+    ) -> tuple[ScheduleDayOverride, dict[UUID, ScheduleWorker]]:
+        await self._store_access.ensure_owner(store_id, user_id)
+        templates = {
+            item.id: item for item in await self._repository.list_templates(store_id)
+        }
+        workers = {item.user_id: item for item in await self._workers(store_id)}
+        if any(item.template_id not in templates for item in inputs):
+            raise ShiftTemplateNotFoundError
+        if any(item.assignee_user_id not in workers for item in inputs):
+            raise InvalidScheduleWorkerError
+        self._validate_daily_conflicts(inputs, templates)
+        override = await self._repository.replace_day_override(
+            store_id,
+            work_date,
+            user_id,
+            [(item.template_id, item.assignee_user_id) for item in inputs],
+            self._clock(),
+        )
+        return override, workers
+
+    async def reset_daily_schedule(
+        self,
+        store_id: UUID,
+        user_id: UUID,
+        work_date: date,
+    ) -> None:
+        await self._store_access.ensure_owner(store_id, user_id)
+        override = await self._repository.get_day_override(store_id, work_date)
+        if override is None:
+            raise DailyScheduleNotFoundError
+        await self._repository.delete_day_override(override)
+
     async def calendar(
         self,
         store_id: UUID,
@@ -269,15 +343,15 @@ class ScheduleService:
         start_date: date,
         end_date: date,
     ) -> tuple[
-        list[tuple[ScheduleAssignment, date, UUID, bool]],
+        list[CalendarOccurrence],
         dict[UUID, ScheduleWorker],
     ]:
         await self._store_access.ensure_member(store_id, user_id)
         if end_date < start_date or (end_date - start_date).days > 62:
             raise ValueError("calendar period must be between 1 and 63 days")
         assignments = await self._repository.list_assignments(store_id)
-        closed_weekdays, closed_on_holidays = (
-            await self._repository.get_store_closure(store_id)
+        closed_weekdays, closed_on_holidays = await self._repository.get_store_closure(
+            store_id
         )
         overrides = await self._repository.list_overrides(
             [item.id for item in assignments], start_date, end_date
@@ -286,9 +360,31 @@ class ScheduleService:
             (item.schedule_assignment_id, item.work_date): item.assignee_user_id
             for item in overrides
         }
-        occurrences: list[tuple[ScheduleAssignment, date, UUID, bool]] = []
+        day_overrides = {
+            item.work_date: item
+            for item in await self._repository.list_day_overrides(
+                store_id, start_date, end_date
+            )
+        }
+        occurrences: list[CalendarOccurrence] = []
         cursor = start_date
         while cursor <= end_date:
+            day_override = day_overrides.get(cursor)
+            if day_override is not None:
+                occurrences.extend(
+                    CalendarOccurrence(
+                        assignment_id=None,
+                        daily_shift_id=shift.id,
+                        template=shift.template,
+                        work_date=cursor,
+                        assignee_user_id=shift.assignee_user_id,
+                        substituted=False,
+                        manually_adjusted=True,
+                    )
+                    for shift in day_override.shifts
+                )
+                cursor += timedelta(days=1)
+                continue
             if cursor.weekday() in closed_weekdays or (
                 closed_on_holidays and self._holiday_checker(cursor)
             ):
@@ -299,20 +395,23 @@ class ScheduleService:
                     continue
                 override_user = override_map.get((assignment.id, cursor))
                 occurrences.append(
-                    (
-                        assignment,
-                        cursor,
-                        override_user or assignment.assignee_user_id,
-                        override_user is not None,
+                    CalendarOccurrence(
+                        assignment_id=assignment.id,
+                        daily_shift_id=None,
+                        template=assignment.template,
+                        work_date=cursor,
+                        assignee_user_id=(override_user or assignment.assignee_user_id),
+                        substituted=override_user is not None,
+                        manually_adjusted=False,
                     )
                 )
             cursor += timedelta(days=1)
         occurrences.sort(
             key=lambda item: (
-                item[1],
-                item[0].template.start_time,
-                item[0].template.sort_order,
-                item[0].id,
+                item.work_date,
+                item.template.start_time,
+                item.template.sort_order,
+                str(item.daily_shift_id or item.assignment_id),
             )
         )
         workers = {item.user_id: item for item in await self._workers(store_id)}
@@ -327,6 +426,8 @@ class ScheduleService:
         target_user_id: UUID,
     ) -> tuple[SubstituteRequest, dict[UUID, ScheduleWorker]]:
         await self._store_access.ensure_member(store_id, requester_user_id)
+        if await self._repository.get_day_override(store_id, work_date) is not None:
+            raise SubstituteRequestConflictError
         assignment = await self._repository.get_assignment(store_id, assignment_id)
         if assignment is None or assignment.weekday != work_date.weekday():
             raise ScheduleAssignmentNotFoundError
@@ -416,6 +517,25 @@ class ScheduleService:
     ) -> UUID:
         override = await self._repository.get_override(assignment.id, work_date)
         return override.assignee_user_id if override else assignment.assignee_user_id
+
+    @staticmethod
+    def _validate_daily_conflicts(
+        inputs: list[DailyScheduleShiftInput],
+        templates: dict[UUID, ShiftTemplate],
+    ) -> None:
+        for index, item in enumerate(inputs):
+            template = templates[item.template_id]
+            for other in inputs[index + 1 :]:
+                if item.assignee_user_id != other.assignee_user_id:
+                    continue
+                other_template = templates[other.template_id]
+                if _overlaps(
+                    template.start_time,
+                    template.end_time,
+                    other_template.start_time,
+                    other_template.end_time,
+                ):
+                    raise DailyScheduleConflictError
 
     async def _ensure_no_target_conflict(
         self,

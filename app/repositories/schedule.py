@@ -10,6 +10,8 @@ from app.models.membership import Membership
 from app.models.schedule import (
     ScheduleAssignment,
     ScheduleAssignmentOverride,
+    ScheduleDayOverride,
+    ScheduleDayShift,
     ShiftTemplate,
     SubstituteRequest,
 )
@@ -103,9 +105,7 @@ class ScheduleRepository:
         assignments: list[ScheduleAssignment],
     ) -> list[ScheduleAssignment]:
         await self._session.execute(
-            delete(ScheduleAssignment).where(
-                ScheduleAssignment.store_id == store_id
-            )
+            delete(ScheduleAssignment).where(ScheduleAssignment.store_id == store_id)
         )
         self._session.add_all(assignments)
         await self._commit()
@@ -161,6 +161,95 @@ class ScheduleRepository:
             ScheduleAssignmentOverride.work_date == work_date,
         )
         return (await self._session.execute(query)).scalar_one_or_none()
+
+    async def list_day_overrides(
+        self,
+        store_id: UUID,
+        start_date: date,
+        end_date: date,
+    ) -> list[ScheduleDayOverride]:
+        query = (
+            select(ScheduleDayOverride)
+            .options(
+                selectinload(ScheduleDayOverride.shifts).selectinload(
+                    ScheduleDayShift.template
+                )
+            )
+            .where(
+                ScheduleDayOverride.store_id == store_id,
+                ScheduleDayOverride.work_date.between(start_date, end_date),
+            )
+            .order_by(ScheduleDayOverride.work_date)
+        )
+        result = await self._session.execute(query)
+        return list(result.scalars().all())
+
+    async def get_day_override(
+        self,
+        store_id: UUID,
+        work_date: date,
+    ) -> ScheduleDayOverride | None:
+        query = (
+            select(ScheduleDayOverride)
+            .options(
+                selectinload(ScheduleDayOverride.shifts).selectinload(
+                    ScheduleDayShift.template
+                )
+            )
+            .where(
+                ScheduleDayOverride.store_id == store_id,
+                ScheduleDayOverride.work_date == work_date,
+            )
+        )
+        return (await self._session.execute(query)).scalar_one_or_none()
+
+    async def replace_day_override(
+        self,
+        store_id: UUID,
+        work_date: date,
+        created_by_user_id: UUID,
+        shifts: list[tuple[UUID, UUID]],
+        cancelled_at: datetime,
+    ) -> ScheduleDayOverride:
+        existing = await self.get_day_override(store_id, work_date)
+        if existing is not None:
+            await self._session.delete(existing)
+            await self._session.flush()
+
+        pending_result = await self._session.execute(
+            select(SubstituteRequest).where(
+                SubstituteRequest.store_id == store_id,
+                SubstituteRequest.work_date == work_date,
+                SubstituteRequest.status == "PENDING",
+            )
+        )
+        for request in pending_result.scalars().all():
+            request.status = "CANCELLED"
+            request.responded_at = cancelled_at
+            self._session.add(request)
+
+        override = ScheduleDayOverride(
+            store_id=store_id,
+            work_date=work_date,
+            created_by_user_id=created_by_user_id,
+            shifts=[
+                ScheduleDayShift(
+                    template_id=template_id,
+                    assignee_user_id=assignee_user_id,
+                )
+                for template_id, assignee_user_id in shifts
+            ],
+        )
+        self._session.add(override)
+        await self._commit()
+        return await self.get_day_override(store_id, work_date) or override
+
+    async def delete_day_override(
+        self,
+        override: ScheduleDayOverride,
+    ) -> None:
+        await self._session.delete(override)
+        await self._commit()
 
     async def find_pending_request(
         self, assignment_id: UUID, work_date: date

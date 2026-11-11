@@ -9,6 +9,10 @@ def test_schedule_routes_are_registered() -> None:
     assert "/api/v1/stores/{store_id}/shift-templates" in paths
     assert "/api/v1/stores/{store_id}/fixed-schedule" in paths
     assert "/api/v1/stores/{store_id}/schedule-calendar" in paths
+    assert "/api/v1/stores/{store_id}/schedule-calendar/{work_date}" in paths
+    daily_methods = paths["/api/v1/stores/{store_id}/schedule-calendar/{work_date}"]
+    assert "put" in daily_methods
+    assert "delete" in daily_methods
     assert "/api/v1/stores/{store_id}/schedule-workers" in paths
     assert "/api/v1/stores/{store_id}/substitute-requests" in paths
     assert "/api/v1/stores/{store_id}/substitute-requests/{request_id}/accept" in paths

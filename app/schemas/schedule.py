@@ -151,7 +151,7 @@ class ScheduleResponse(ScheduleSchema):
 
 
 class CalendarShiftResponse(ScheduleSchema):
-    assignment_id: UUID
+    assignment_id: UUID | None
     template_id: UUID
     date: date
     name: str
@@ -160,11 +160,37 @@ class CalendarShiftResponse(ScheduleSchema):
     role: str
     assignee: ScheduleWorkerResponse
     substituted: bool
+    daily_shift_id: UUID | None = None
+    manually_adjusted: bool = False
 
 
 class ScheduleCalendarResponse(ScheduleSchema):
     start_date: date
     end_date: date
+    shifts: list[CalendarShiftResponse]
+
+
+class DailyScheduleShiftInput(ScheduleSchema):
+    template_id: UUID
+    assignee_user_id: UUID
+
+
+class DailyScheduleReplaceRequest(ScheduleSchema):
+    shifts: list[DailyScheduleShiftInput] = Field(max_length=200)
+
+    @field_validator("shifts")
+    @classmethod
+    def reject_duplicates(
+        cls, value: list[DailyScheduleShiftInput]
+    ) -> list[DailyScheduleShiftInput]:
+        keys = [(item.template_id, item.assignee_user_id) for item in value]
+        if len(keys) != len(set(keys)):
+            raise ValueError("shifts must not contain duplicates")
+        return value
+
+
+class DailyScheduleResponse(ScheduleSchema):
+    date: date
     shifts: list[CalendarShiftResponse]
 
 

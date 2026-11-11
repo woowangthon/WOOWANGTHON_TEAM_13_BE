@@ -21,6 +21,8 @@ from app.repositories.schedule import ScheduleRepository
 from app.repositories.store import StoreRepository
 from app.schemas.schedule import (
     CalendarShiftResponse,
+    DailyScheduleReplaceRequest,
+    DailyScheduleResponse,
     ScheduleAssignmentResponse,
     ScheduleCalendarResponse,
     ScheduleReplaceRequest,
@@ -37,6 +39,9 @@ from app.schemas.schedule import (
     SubstituteRequestStatus,
 )
 from app.services.schedule import (
+    CalendarOccurrence,
+    DailyScheduleConflictError,
+    DailyScheduleNotFoundError,
     InvalidScheduleWorkerError,
     ScheduleAssignmentNotFoundError,
     ScheduleService,
@@ -153,6 +158,25 @@ def _request_response(
         is_read=item.target_read_at is not None,
         created_at=item.created_at,
         responded_at=item.responded_at,
+    )
+
+
+def _calendar_shift_response(
+    item: CalendarOccurrence,
+    workers: dict[UUID, ScheduleWorker],
+) -> CalendarShiftResponse:
+    return CalendarShiftResponse(
+        assignment_id=item.assignment_id,
+        daily_shift_id=item.daily_shift_id,
+        template_id=item.template.id,
+        date=item.work_date,
+        name=item.template.name,
+        start=_time_text(item.template.start_time),
+        end=_time_text(item.template.end_time),
+        role=item.template.role,
+        assignee=_worker_response(_worker(workers, item.assignee_user_id)),
+        substituted=item.substituted,
+        manually_adjusted=item.manually_adjusted,
     )
 
 
@@ -296,21 +320,83 @@ async def get_schedule_calendar(
     return ScheduleCalendarResponse(
         start_date=start_date,
         end_date=end_date,
-        shifts=[
-            CalendarShiftResponse(
-                assignment_id=assignment.id,
-                template_id=assignment.template_id,
-                date=work_date,
-                name=assignment.template.name,
-                start=_time_text(assignment.template.start_time),
-                end=_time_text(assignment.template.end_time),
-                role=assignment.template.role,
-                assignee=_worker_response(_worker(workers, assignee_id)),
-                substituted=substituted,
+        shifts=[_calendar_shift_response(item, workers) for item in occurrences],
+    )
+
+
+@router.put(
+    "/schedule-calendar/{work_date}",
+    response_model=DailyScheduleResponse,
+)
+async def replace_daily_schedule(
+    store_id: UUID,
+    work_date: date,
+    request: DailyScheduleReplaceRequest,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[ScheduleService, Depends(get_schedule_service)],
+) -> DailyScheduleResponse | JSONResponse:
+    try:
+        with _translate_access():
+            override, workers = await service.replace_daily_schedule(
+                store_id,
+                user.id,
+                work_date,
+                request.shifts,
             )
-            for assignment, work_date, assignee_id, substituted in occurrences
+    except ShiftTemplateNotFoundError:
+        return _error(
+            422, "INVALID_SHIFT_TEMPLATE", "다른 매장의 템플릿이 포함되어 있어요"
+        )
+    except InvalidScheduleWorkerError:
+        return _error(
+            422, "INVALID_SCHEDULE_WORKER", "배정할 수 없는 구성원이 포함되어 있어요"
+        )
+    except DailyScheduleConflictError:
+        return _error(
+            409,
+            "DAILY_SCHEDULE_TIME_CONFLICT",
+            "같은 구성원의 근무 시간이 겹쳐요",
+        )
+    return DailyScheduleResponse(
+        date=work_date,
+        shifts=[
+            _calendar_shift_response(
+                CalendarOccurrence(
+                    assignment_id=None,
+                    daily_shift_id=shift.id,
+                    template=shift.template,
+                    work_date=work_date,
+                    assignee_user_id=shift.assignee_user_id,
+                    substituted=False,
+                    manually_adjusted=True,
+                ),
+                workers,
+            )
+            for shift in override.shifts
         ],
     )
+
+
+@router.delete(
+    "/schedule-calendar/{work_date}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def reset_daily_schedule(
+    store_id: UUID,
+    work_date: date,
+    user: Annotated[User, Depends(get_active_user)],
+    service: Annotated[ScheduleService, Depends(get_schedule_service)],
+) -> Response:
+    try:
+        with _translate_access():
+            await service.reset_daily_schedule(store_id, user.id, work_date)
+    except DailyScheduleNotFoundError:
+        return _error(
+            404,
+            "DAILY_SCHEDULE_NOT_FOUND",
+            "해당 날짜에 저장된 직접 조정 내역이 없어요",
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post(

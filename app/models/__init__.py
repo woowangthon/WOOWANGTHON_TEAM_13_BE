@@ -16,6 +16,8 @@ from app.models.recipe import Recipe
 from app.models.schedule import (
     ScheduleAssignment,
     ScheduleAssignmentOverride,
+    ScheduleDayOverride,
+    ScheduleDayShift,
     ShiftTemplate,
     SubstituteRequest,
 )
@@ -39,6 +41,8 @@ __all__ = [
     "OwnerQuestion",
     "Recipe",
     "ScheduleAssignmentOverride",
+    "ScheduleDayOverride",
+    "ScheduleDayShift",
     "ShiftTemplate",
     "Store",
     "SubstituteRequest",

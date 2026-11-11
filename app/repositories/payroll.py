@@ -5,9 +5,15 @@ from uuid import UUID
 
 from sqlalchemy import ColumnElement, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.membership import Membership
-from app.models.schedule import ScheduleAssignment, ScheduleAssignmentOverride
+from app.models.schedule import (
+    ScheduleAssignment,
+    ScheduleAssignmentOverride,
+    ScheduleDayOverride,
+    ScheduleDayShift,
+)
 from app.models.store import Store
 
 
@@ -86,7 +92,7 @@ class PayrollRepository:
         start_date: date,
         end_date: date,
     ) -> dict[UUID, list[tuple[date, time, time]]]:
-        """기간 안의 고정 스케줄과 날짜별 대타 반영 결과를 조회합니다."""
+        """고정 스케줄, 대타, 사장님 날짜별 조정을 합쳐 조회합니다."""
         shifts: dict[UUID, list[tuple[date, time, time]]] = defaultdict(list)
         if not membership_ids:
             return shifts
@@ -110,7 +116,25 @@ class PayrollRepository:
             .scalars()
             .all()
         )
-        if schedule_assignments:
+        day_overrides = list(
+            (
+                await self._session.execute(
+                    select(ScheduleDayOverride)
+                    .options(
+                        selectinload(ScheduleDayOverride.shifts).selectinload(
+                            ScheduleDayShift.template
+                        )
+                    )
+                    .where(
+                        ScheduleDayOverride.store_id == store_id,
+                        ScheduleDayOverride.work_date.between(start_date, end_date),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if schedule_assignments or day_overrides:
             overrides = (
                 await self._session.execute(
                     select(ScheduleAssignmentOverride).where(
@@ -128,8 +152,24 @@ class PayrollRepository:
                 (item.schedule_assignment_id, item.work_date): item.assignee_user_id
                 for item in overrides
             }
+            day_override_map = {item.work_date: item for item in day_overrides}
             cursor = start_date
             while cursor <= end_date:
+                day_override = day_override_map.get(cursor)
+                if day_override is not None:
+                    for shift in day_override.shifts:
+                        member_id = member_by_user.get(shift.assignee_user_id)
+                        if member_id is None:
+                            continue
+                        shifts[member_id].append(
+                            (
+                                cursor,
+                                shift.template.start_time,
+                                shift.template.end_time,
+                            )
+                        )
+                    cursor += timedelta(days=1)
+                    continue
                 for assignment in schedule_assignments:
                     if assignment.weekday != cursor.weekday():
                         continue
