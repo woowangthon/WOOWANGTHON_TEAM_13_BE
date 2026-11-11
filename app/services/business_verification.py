@@ -1,15 +1,15 @@
-from datetime import date
 from typing import Protocol
 from uuid import UUID
 
 from app.integrations.business_registration import (
-    BusinessRegistrationValidationResult,
+    BusinessRegistrationStatusResult,
 )
 from app.models.business_verification import BusinessVerification
 from app.schemas.business_verification import BusinessVerificationCreateRequest
 
 VERIFIED_STATUS = "VERIFIED"
 INVALID_STATUS = "INVALID"
+DEMO_BUSINESS_REGISTRATION_NUMBER = "0000000000"
 
 
 class BusinessVerificationNotFoundError(Exception):
@@ -17,13 +17,11 @@ class BusinessVerificationNotFoundError(Exception):
 
 
 class BusinessRegistrationClientProtocol(Protocol):
-    async def validate(
+    async def check_status(
         self,
         *,
         business_registration_number: str,
-        owner_name: str,
-        business_start_date: date,
-    ) -> BusinessRegistrationValidationResult: ...
+    ) -> BusinessRegistrationStatusResult: ...
 
 
 class BusinessVerificationRepositoryProtocol(Protocol):
@@ -53,17 +51,21 @@ class BusinessVerificationService:
         requester_id: UUID,
         request: BusinessVerificationCreateRequest,
     ) -> BusinessVerification:
-        result = await self._client.validate(
-            business_registration_number=request.business_registration_number,
-            owner_name=request.owner_name,
-            business_start_date=request.business_start_date,
-        )
+        if request.business_registration_number == DEMO_BUSINESS_REGISTRATION_NUMBER:
+            result = BusinessRegistrationStatusResult(
+                active=True,
+                message="시연·테스트용 사업자등록번호입니다.",
+            )
+        else:
+            result = await self._client.check_status(
+                business_registration_number=request.business_registration_number,
+            )
         verification = BusinessVerification(
             requester_id=requester_id,
             business_registration_number=request.business_registration_number,
-            owner_name=request.owner_name,
-            business_start_date=request.business_start_date,
-            status=VERIFIED_STATUS if result.valid else INVALID_STATUS,
+            owner_name=None,
+            business_start_date=None,
+            status=VERIFIED_STATUS if result.active else INVALID_STATUS,
             provider_message=result.message,
         )
         return await self._repository.create(verification)
