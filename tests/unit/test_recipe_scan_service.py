@@ -5,6 +5,14 @@ from uuid import UUID, uuid4
 import pytest
 
 from app.integrations.llm import LLMError, LLMImage
+from app.schemas.recipe import (
+    INGREDIENTS_MAX_COUNT,
+    RECIPE_NAME_MAX_LENGTH,
+    STEP_MAX_LENGTH,
+    STEPS_MAX_COUNT,
+    RecipeCreateRequest,
+    RecipeIngredient,
+)
 from app.services.recipe_scan import (
     MAX_IMAGE_BYTES,
     SCAN_RESPONSE_SCHEMA,
@@ -142,6 +150,31 @@ def test_cleans_unexpected_values() -> None:
     assert draft.size is None
     assert draft.ingredients == [RecipeScanIngredientDraft("얼음", None)]
     assert draft.steps == ["섞어요"]
+
+
+def test_long_draft_is_trimmed_so_it_can_be_saved() -> None:
+    draft = interpret_scan(
+        {
+            **VALID_RESULT,
+            "name": "가" * 150,
+            "ingredients": [{"name": "우유", "amount": "1" * 80}] * 60,
+            "steps": ["나" * 400] * 40,
+        }
+    )
+
+    request = RecipeCreateRequest(
+        name=draft.name,
+        category="라떼",
+        ingredients=[
+            RecipeIngredient(name=item.name, amount=item.amount or "적당량")
+            for item in draft.ingredients
+        ],
+        steps=draft.steps,
+    )
+    assert len(request.name) == RECIPE_NAME_MAX_LENGTH
+    assert len(request.ingredients) == INGREDIENTS_MAX_COUNT
+    assert len(request.steps) == STEPS_MAX_COUNT
+    assert len(request.steps[0]) == STEP_MAX_LENGTH
 
 
 def test_single_recipe_has_no_more_recipes() -> None:

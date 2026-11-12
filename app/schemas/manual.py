@@ -14,6 +14,7 @@ ManualIcon = Literal[
     "milk",
     "umbrella",
 ]
+MANUAL_BODY_MAX_LENGTH = 5000
 
 
 def _to_camel(value: str) -> str:
@@ -54,7 +55,7 @@ class ManualCategoryResponse(ManualSchema):
 
 class ManualCreateRequest(ManualSchema):
     title: str = Field(min_length=1, max_length=100)
-    body: str = Field(min_length=1)
+    body: str = Field(min_length=1, max_length=MANUAL_BODY_MAX_LENGTH)
     category_id: UUID | None = None
     icon: ManualIcon | None = None
 
@@ -67,7 +68,7 @@ class ManualCreateRequest(ManualSchema):
 
 class ManualUpdateRequest(ManualSchema):
     title: str | None = Field(default=None, max_length=100)
-    body: str | None = None
+    body: str | None = Field(default=None, max_length=MANUAL_BODY_MAX_LENGTH)
     category_id: UUID | None = None
     icon: ManualIcon | None = None
 

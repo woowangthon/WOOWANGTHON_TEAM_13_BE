@@ -348,6 +348,8 @@ uvicorn app.app:app --reload
 매뉴얼 등록은 `multipart/form-data`이며 `manual` 파트에 JSON을 담습니다. 파일
 저장소가 정해지기 전까지 `files` 파트를 보내면 `501`을 반환합니다.
 
+제목은 100자, 본문(`body`)은 5000자까지 받습니다. 넘으면 `422`를 반환합니다.
+
 ## 레시피 API
 
 레시피 API는 모두 Supabase access token이 필요합니다. 등록·수정·삭제는 매장
@@ -366,6 +368,18 @@ uvicorn app.app:app --reload
 
 레시피 등록은 `multipart/form-data`이며 `recipe` 파트에 JSON을 담습니다. 사진은
 선택이며 `image` 파트에 메뉴 사진, `recipeImage` 파트에 레시피 사진을 담습니다.
+
+| 필드 | 상한 |
+| --- | --- |
+| `name` | 100자 |
+| `category` | 50자 |
+| `size` | 20자 |
+| `ingredients` | 50개 (재료 이름 100자, 양 50자) |
+| `steps` | 30개 (한 단계 300자) |
+| `memo` | 1000자 |
+
+상한을 넘으면 `422`를 반환합니다. 레시피 스캔 초안도 같은 상한에 맞춰 잘라서 반환하므로
+초안을 그대로 저장해도 막히지 않습니다.
 
 레시피 사진은 메뉴 사진(`slot`=`menu`)과 레시피 사진(`slot`=`recipe`) 두 장입니다.
 글 수정(`PATCH`)과 별도로, 사진은 `PUT .../images/{slot}`(`image` 파트)로 바꾸고
