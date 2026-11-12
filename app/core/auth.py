@@ -11,6 +11,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWTError
 
+# Supabase와 서버 시계가 몇 초 어긋나도 새 토큰을 받아 주는 허용 오차입니다.
+JWT_LEEWAY_SECONDS = 30
+
 
 class JWTValidationError(Exception):
     """Raised when a Supabase access token cannot be trusted."""
@@ -47,8 +50,10 @@ class SupabaseJWTVerifier:
         audience: str,
         algorithms: Sequence[str] = ("RS256", "ES256"),
         jwks_client: SigningKeyClient | None = None,
+        leeway_seconds: int = JWT_LEEWAY_SECONDS,
     ) -> None:
         self._issuer = issuer
+        self._leeway_seconds = leeway_seconds
         self._audience = audience
         self._algorithms = tuple(algorithms)
         self._jwks_client = jwks_client or PyJWKClient(
@@ -70,6 +75,7 @@ class SupabaseJWTVerifier:
                 algorithms=list(self._algorithms),
                 audience=self._audience,
                 issuer=self._issuer,
+                leeway=self._leeway_seconds,
                 options={"require": ["sub", "iss", "aud", "exp"]},
             )
         except (PyJWTError, ValueError, TypeError) as exc:
