@@ -4,6 +4,16 @@ from typing import Any
 from uuid import UUID
 
 from app.integrations.llm import LLMClient, LLMError, LLMImage
+from app.schemas.recipe import (
+    INGREDIENT_AMOUNT_MAX_LENGTH,
+    INGREDIENT_NAME_MAX_LENGTH,
+    INGREDIENTS_MAX_COUNT,
+    RECIPE_CATEGORY_MAX_LENGTH,
+    RECIPE_NAME_MAX_LENGTH,
+    RECIPE_SIZE_MAX_LENGTH,
+    STEP_MAX_LENGTH,
+    STEPS_MAX_COUNT,
+)
 from app.services.store_access import StoreAccessProtocol
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -94,21 +104,22 @@ class RecipeScanDraft:
     has_more_recipes: bool = False
 
 
-def _optional_text(value: object) -> str | None:
-    """문자열이면 공백을 제거하고 그 외 값은 null로 바꿉니다."""
+def _optional_text(value: object, max_length: int) -> str | None:
+    """문자열은 공백을 빼고 저장 상한에 맞게 자르며, 그 외 값은 null로 바꿉니다."""
     if not isinstance(value, str):
         return None
-    return value.strip() or None
+    return value.strip()[:max_length].strip() or None
 
 
 def _ingredient(item: object) -> RecipeScanIngredientDraft | None:
     """이름이 있는 재료만 초안으로 변환합니다."""
     if not isinstance(item, Mapping):
         return None
-    name = _optional_text(item.get("name"))
+    name = _optional_text(item.get("name"), INGREDIENT_NAME_MAX_LENGTH)
     if name is None:
         return None
-    return RecipeScanIngredientDraft(name, _optional_text(item.get("amount")))
+    amount = _optional_text(item.get("amount"), INGREDIENT_AMOUNT_MAX_LENGTH)
+    return RecipeScanIngredientDraft(name, amount)
 
 
 def interpret_scan(result: Mapping[str, Any]) -> RecipeScanDraft:
@@ -116,11 +127,11 @@ def interpret_scan(result: Mapping[str, Any]) -> RecipeScanDraft:
     is_recipe = result.get("isRecipe")
     if not isinstance(is_recipe, bool):
         raise LLMError("LLM returned an invalid recipe scan")
-    name = _optional_text(result.get("name"))
+    name = _optional_text(result.get("name"), RECIPE_NAME_MAX_LENGTH)
     if not is_recipe or name is None:
         raise RecipeImageUnreadableError
 
-    temp = _optional_text(result.get("temp"))
+    temp = _optional_text(result.get("temp"), len("DESSERT"))
     ingredients = result.get("ingredients")
     steps = result.get("steps")
     parsed = [
@@ -128,15 +139,18 @@ def interpret_scan(result: Mapping[str, Any]) -> RecipeScanDraft:
         for item in (ingredients if isinstance(ingredients, list) else [])
     ]
     texts = [
-        _optional_text(step) for step in (steps if isinstance(steps, list) else [])
+        _optional_text(step, STEP_MAX_LENGTH)
+        for step in (steps if isinstance(steps, list) else [])
     ]
     return RecipeScanDraft(
         name=name,
-        category=_optional_text(result.get("category")),
+        category=_optional_text(result.get("category"), RECIPE_CATEGORY_MAX_LENGTH),
         temp=temp if temp in ALLOWED_TEMPS else None,
-        size=_optional_text(result.get("size")),
-        ingredients=[item for item in parsed if item is not None],
-        steps=[text for text in texts if text is not None],
+        size=_optional_text(result.get("size"), RECIPE_SIZE_MAX_LENGTH),
+        ingredients=[item for item in parsed if item is not None][
+            :INGREDIENTS_MAX_COUNT
+        ],
+        steps=[text for text in texts if text is not None][:STEPS_MAX_COUNT],
         has_more_recipes=result.get("hasMoreRecipes") is True,
     )
 

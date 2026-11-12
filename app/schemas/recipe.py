@@ -1,10 +1,21 @@
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 RecipeTemp = Literal["ICE", "HOT", "DESSERT"]
+RECIPE_NAME_MAX_LENGTH = 100
+RECIPE_CATEGORY_MAX_LENGTH = 50
+RECIPE_SIZE_MAX_LENGTH = 20
+INGREDIENT_NAME_MAX_LENGTH = 100
+INGREDIENT_AMOUNT_MAX_LENGTH = 50
+INGREDIENTS_MAX_COUNT = 50
+STEPS_MAX_COUNT = 30
+STEP_MAX_LENGTH = 300
+MEMO_MAX_LENGTH = 1000
+
+RecipeStep = Annotated[str, Field(max_length=STEP_MAX_LENGTH)]
 
 
 def _to_camel(value: str) -> str:
@@ -43,8 +54,8 @@ class RecipeSchema(BaseModel):
 
 
 class RecipeIngredient(RecipeSchema):
-    name: str = Field(min_length=1, max_length=100)
-    amount: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=INGREDIENT_NAME_MAX_LENGTH)
+    amount: str = Field(min_length=1, max_length=INGREDIENT_AMOUNT_MAX_LENGTH)
 
     @field_validator("name", "amount")
     @classmethod
@@ -69,13 +80,15 @@ class RecipeScanResponse(RecipeSchema):
 
 
 class RecipeCreateRequest(RecipeSchema):
-    name: str = Field(min_length=1, max_length=100)
-    category: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=RECIPE_NAME_MAX_LENGTH)
+    category: str = Field(min_length=1, max_length=RECIPE_CATEGORY_MAX_LENGTH)
     temp: RecipeTemp | None = None
-    size: str | None = Field(default=None, max_length=20)
-    ingredients: list[RecipeIngredient] = Field(default_factory=list)
-    steps: list[str] = Field(default_factory=list)
-    memo: str | None = None
+    size: str | None = Field(default=None, max_length=RECIPE_SIZE_MAX_LENGTH)
+    ingredients: list[RecipeIngredient] = Field(
+        default_factory=list, max_length=INGREDIENTS_MAX_COUNT
+    )
+    steps: list[RecipeStep] = Field(default_factory=list, max_length=STEPS_MAX_COUNT)
+    memo: str | None = Field(default=None, max_length=MEMO_MAX_LENGTH)
 
     @field_validator("name", "category")
     @classmethod
@@ -97,13 +110,15 @@ class RecipeCreateRequest(RecipeSchema):
 
 
 class RecipeUpdateRequest(RecipeSchema):
-    name: str | None = Field(default=None, max_length=100)
-    category: str | None = Field(default=None, max_length=50)
+    name: str | None = Field(default=None, max_length=RECIPE_NAME_MAX_LENGTH)
+    category: str | None = Field(default=None, max_length=RECIPE_CATEGORY_MAX_LENGTH)
     temp: RecipeTemp | None = None
-    size: str | None = Field(default=None, max_length=20)
-    ingredients: list[RecipeIngredient] | None = None
-    steps: list[str] | None = None
-    memo: str | None = None
+    size: str | None = Field(default=None, max_length=RECIPE_SIZE_MAX_LENGTH)
+    ingredients: list[RecipeIngredient] | None = Field(
+        default=None, max_length=INGREDIENTS_MAX_COUNT
+    )
+    steps: list[RecipeStep] | None = Field(default=None, max_length=STEPS_MAX_COUNT)
+    memo: str | None = Field(default=None, max_length=MEMO_MAX_LENGTH)
 
     @field_validator("name", "category")
     @classmethod
