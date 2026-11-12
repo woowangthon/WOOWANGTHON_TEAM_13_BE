@@ -108,7 +108,7 @@ async def test_verify_es256_token_used_by_supabase() -> None:
 @pytest.mark.parametrize(
     "claim_overrides",
     [
-        {"exp": datetime.now(UTC) - timedelta(seconds=1)},
+        {"exp": datetime.now(UTC) - timedelta(minutes=2)},
         {"iss": "https://attacker.example/auth/v1"},
         {"aud": "wrong-audience"},
     ],
@@ -123,6 +123,39 @@ async def test_reject_invalid_token_claims(
         await build_verifier(private_key).verify(token)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "claim_overrides",
+    [
+        {"iat": datetime.now(UTC) + timedelta(seconds=20)},
+        {"nbf": datetime.now(UTC) + timedelta(seconds=20)},
+        {"exp": datetime.now(UTC) - timedelta(seconds=10)},
+    ],
+)
+async def test_allow_small_clock_skew_between_supabase_and_server(
+    private_key: rsa.RSAPrivateKey,
+    claim_overrides: dict[str, Any],
+) -> None:
+    claims = build_claims(**claim_overrides)
+    token = encode_token(private_key, claims)
+
+    decoded = await build_verifier(private_key).verify(token)
+
+    assert decoded["sub"] == claims["sub"]
+
+
+@pytest.mark.asyncio
+async def test_reject_token_issued_beyond_clock_skew(
+    private_key: rsa.RSAPrivateKey,
+) -> None:
+    token = encode_token(
+        private_key, build_claims(nbf=datetime.now(UTC) + timedelta(minutes=2))
+    )
+
+    with pytest.raises(JWTValidationError):
+        await build_verifier(private_key).verify(token)
+
+
 def create_protected_client(claims: Mapping[str, Any]) -> TestClient:
     test_app = FastAPI()
 
@@ -132,9 +165,7 @@ def create_protected_client(claims: Mapping[str, Any]) -> TestClient:
     ) -> dict[str, str | None]:
         return {"user_id": str(user.id), "email": user.email}
 
-    test_app.dependency_overrides[get_jwt_verifier] = lambda: StaticVerifier(
-        claims
-    )
+    test_app.dependency_overrides[get_jwt_verifier] = lambda: StaticVerifier(claims)
     return TestClient(test_app)
 
 
