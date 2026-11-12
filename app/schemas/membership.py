@@ -48,3 +48,13 @@ class HourlyWageUpdateResponse(MembershipSchema):
     member_id: UUID
     hourly_wage: int
     updated_at: datetime
+
+
+class TaxTypeUpdateRequest(MembershipSchema):
+    tax_type: TaxType
+
+
+class TaxTypeUpdateResponse(MembershipSchema):
+    member_id: UUID
+    tax_type: TaxType
+    updated_at: datetime

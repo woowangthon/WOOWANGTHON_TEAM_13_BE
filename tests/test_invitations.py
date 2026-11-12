@@ -23,6 +23,8 @@ from app.services.invitation import (
     VerifiedInvitation,
 )
 from app.services.membership import (
+    MemberAlreadyLeftError,
+    MemberNotFoundError,
     MemberWithInvitation,
     PendingMember,
     WageBelowMinimumError,
@@ -199,6 +201,23 @@ class StubMembershipService:
         self.membership.updated_at = datetime.now(UTC)
         return self.membership
 
+    async def update_tax_type(
+        self,
+        store_id: UUID,
+        member_id: UUID,
+        tax_type: str,
+    ) -> Membership:
+        if (
+            store_id != self.membership.store_id
+            or member_id != self.membership.id
+        ):
+            raise MemberNotFoundError
+        if self.membership.left_at is not None:
+            raise MemberAlreadyLeftError
+        self.membership.tax_type = tax_type
+        self.membership.updated_at = datetime.now(UTC)
+        return self.membership
+
 
 def create_client() -> tuple[TestClient, StubInvitationService]:
     test_app = FastAPI()
@@ -258,6 +277,7 @@ def test_invitation_routes_are_registered() -> None:
     assert (
         "/api/v1/stores/{store_id}/members/{member_id}/hourly-wage" in paths
     )
+    assert "/api/v1/stores/{store_id}/members/{member_id}/tax-type" in paths
     assert (
         "/api/v1/stores/{store_id}/invitations/{invitation_id}/share-info"
         in paths
@@ -531,4 +551,75 @@ def test_owner_cannot_set_wage_below_2026_minimum() -> None:
         "code": "WAGE_BELOW_MINIMUM",
         "message": "최저시급 10,320원보다 낮아요",
         "detail": {"minimumHourlyWage": 10_320},
+    }
+
+
+def test_owner_updates_member_tax_type() -> None:
+    client, service = create_client()
+    membership = service.membership_service.membership
+
+    response = client.put(
+        f"/api/v1/stores/{service.store.id}/members/{membership.id}/tax-type",
+        json={"taxType": "3.3"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["memberId"] == str(membership.id)
+    assert response.json()["taxType"] == "3.3"
+    assert response.json()["updatedAt"] is not None
+
+
+def test_owner_cannot_set_invalid_tax_type() -> None:
+    client, service = create_client()
+    membership = service.membership_service.membership
+
+    response = client.put(
+        f"/api/v1/stores/{service.store.id}/members/{membership.id}/tax-type",
+        json={"taxType": "freelance"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_non_owner_cannot_update_member_tax_type() -> None:
+    client, service = create_client()
+    membership = service.membership_service.membership
+    service.store.owner_id = uuid4()
+
+    response = client.put(
+        f"/api/v1/stores/{service.store.id}/members/{membership.id}/tax-type",
+        json={"taxType": "ins"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "STORE_NOT_FOUND"
+
+
+def test_owner_cannot_update_unknown_member_tax_type() -> None:
+    client, service = create_client()
+
+    response = client.put(
+        f"/api/v1/stores/{service.store.id}/members/{uuid4()}/tax-type",
+        json={"taxType": "ins"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "MEMBER_NOT_FOUND"
+
+
+def test_owner_cannot_update_left_member_tax_type() -> None:
+    client, service = create_client()
+    membership = service.membership_service.membership
+    membership.left_at = datetime.now(UTC)
+
+    response = client.put(
+        f"/api/v1/stores/{service.store.id}/members/{membership.id}/tax-type",
+        json={"taxType": "ins"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "code": "MEMBER_ALREADY_LEFT",
+        "message": "퇴사한 구성원의 공제 유형은 변경할 수 없어요",
+        "detail": None,
     }

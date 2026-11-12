@@ -32,6 +32,8 @@ from app.schemas.membership import (
     MemberListResponse,
     MemberResponse,
     TaxType,
+    TaxTypeUpdateRequest,
+    TaxTypeUpdateResponse,
 )
 from app.services.invitation import (
     InvalidInvitationScheduleError,
@@ -666,6 +668,65 @@ async def update_member_hourly_wage(
     return HourlyWageUpdateResponse(
         member_id=membership.id,
         hourly_wage=membership.hourly_wage,
+        updated_at=membership.updated_at,
+    )
+
+
+@router.put(
+    "/stores/{store_id}/members/{member_id}/tax-type",
+    response_model=TaxTypeUpdateResponse,
+)
+async def update_member_tax_type(
+    store_id: UUID,
+    member_id: UUID,
+    request: TaxTypeUpdateRequest,
+    identity: Annotated[AuthenticatedUser, Depends(get_current_user)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+    store_service: Annotated[StoreService, Depends(get_store_service)],
+    membership_service: Annotated[
+        MembershipService,
+        Depends(get_membership_service),
+    ],
+) -> TaxTypeUpdateResponse | Response:
+    owner = await _active_user(user_service, identity)
+    try:
+        await store_service.get_for_owner(store_id, owner.id)
+    except StoreNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "STORE_NOT_FOUND",
+                "message": "매장을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    try:
+        membership = await membership_service.update_tax_type(
+            store_id,
+            member_id,
+            request.tax_type,
+        )
+    except MemberNotFoundError:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={
+                "code": "MEMBER_NOT_FOUND",
+                "message": "구성원을 찾을 수 없어요",
+                "detail": None,
+            },
+        )
+    except MemberAlreadyLeftError:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "code": "MEMBER_ALREADY_LEFT",
+                "message": "퇴사한 구성원의 공제 유형은 변경할 수 없어요",
+                "detail": None,
+            },
+        )
+    return TaxTypeUpdateResponse(
+        member_id=membership.id,
+        tax_type=cast(TaxType, membership.tax_type),
         updated_at=membership.updated_at,
     )
 
