@@ -90,7 +90,13 @@ async def test_creates_verification_result(
     assert result.provider_message == "확인 결과"
 
 
-async def test_demo_number_is_verified_without_provider_call() -> None:
+@pytest.mark.parametrize(
+    "business_registration_number",
+    ["000-00-00000", "111-11-11111"],
+)
+async def test_demo_number_is_verified_without_provider_call(
+    business_registration_number: str,
+) -> None:
     requester_id = uuid4()
     repository = FakeBusinessVerificationRepository()
     client = FakeBusinessRegistrationClient(False)
@@ -98,7 +104,9 @@ async def test_demo_number_is_verified_without_provider_call() -> None:
 
     result = await service.create(
         requester_id,
-        BusinessVerificationCreateRequest(businessRegistrationNumber="000-00-00000"),
+        BusinessVerificationCreateRequest(
+            businessRegistrationNumber=business_registration_number,
+        ),
     )
 
     assert result.status == "VERIFIED"

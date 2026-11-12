@@ -9,7 +9,12 @@ from app.schemas.business_verification import BusinessVerificationCreateRequest
 
 VERIFIED_STATUS = "VERIFIED"
 INVALID_STATUS = "INVALID"
-DEMO_BUSINESS_REGISTRATION_NUMBER = "0000000000"
+DEMO_BUSINESS_REGISTRATION_NUMBERS = frozenset(
+    {
+        "0000000000",
+        "1111111111",
+    }
+)
 
 
 class BusinessVerificationNotFoundError(Exception):
@@ -51,7 +56,7 @@ class BusinessVerificationService:
         requester_id: UUID,
         request: BusinessVerificationCreateRequest,
     ) -> BusinessVerification:
-        if request.business_registration_number == DEMO_BUSINESS_REGISTRATION_NUMBER:
+        if request.business_registration_number in DEMO_BUSINESS_REGISTRATION_NUMBERS:
             result = BusinessRegistrationStatusResult(
                 active=True,
                 message="시연·테스트용 사업자등록번호입니다.",
