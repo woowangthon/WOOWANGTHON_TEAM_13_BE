@@ -192,6 +192,35 @@ async def test_update_hourly_wage_rejects_below_minimum() -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_tax_type_updates_active_member() -> None:
+    membership = make_membership()
+    service = MembershipService(FakeMembershipRepository(membership))
+
+    updated = await service.update_tax_type(
+        membership.store_id,
+        membership.id,
+        "ins",
+    )
+
+    assert updated.tax_type == "ins"
+    assert updated.updated_at is not None
+
+
+@pytest.mark.asyncio
+async def test_update_tax_type_rejects_left_member() -> None:
+    membership = make_membership()
+    membership.left_at = datetime.now(UTC)
+    service = MembershipService(FakeMembershipRepository(membership))
+
+    with pytest.raises(MemberAlreadyLeftError):
+        await service.update_tax_type(
+            membership.store_id,
+            membership.id,
+            "3.3",
+        )
+
+
+@pytest.mark.asyncio
 async def test_list_members_includes_available_invitation() -> None:
     membership = make_membership()
     invitation = Invitation(

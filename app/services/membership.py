@@ -7,6 +7,7 @@ from app.models.invitation import Invitation
 from app.models.membership import Membership
 from app.models.store import Store
 from app.schemas.invitation import MINIMUM_HOURLY_WAGE_2026
+from app.schemas.membership import TaxType
 from app.schemas.user import MyStoreDetail, StoreSummary
 
 UserStoreRecord = tuple[
@@ -174,5 +175,19 @@ class MembershipService:
         if membership.left_at is not None:
             raise MemberAlreadyLeftError
         membership.hourly_wage = hourly_wage
+        membership.updated_at = datetime.now(UTC)
+        return await self._repository.update(membership)
+
+    async def update_tax_type(
+        self,
+        store_id: UUID,
+        member_id: UUID,
+        tax_type: TaxType,
+    ) -> Membership:
+        member = await self.get_member(store_id, member_id)
+        membership = member.membership
+        if membership.left_at is not None:
+            raise MemberAlreadyLeftError
+        membership.tax_type = tax_type
         membership.updated_at = datetime.now(UTC)
         return await self._repository.update(membership)
