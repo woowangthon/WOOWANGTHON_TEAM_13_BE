@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.api.v1.assistant_chats import get_owner_question_service
 from app.api.v1.owner_questions import router
+from app.api.v1.push_subscriptions import get_push_service
 from app.api.v1.users import get_user_service
 from app.app import app
 from app.core.auth import AuthenticatedUser, get_current_user
@@ -102,8 +103,26 @@ class StubOwnerQuestionService:
         return ManualDraft(title="우산 대여", body="카운터 아래 우산을 빌려드려요.")
 
 
+class StubPushService:
+    def __init__(self) -> None:
+        self.answer: tuple[UUID, UUID, UUID, str] | None = None
+
+    async def notify_owner_answer(
+        self,
+        staff_id: UUID,
+        store_id: UUID,
+        chat_id: UUID,
+        answer: str,
+    ) -> None:
+        self.answer = (staff_id, store_id, chat_id, answer)
+
+
+PUSH = StubPushService()
+
+
 def make_client() -> tuple[TestClient, StubOwnerQuestionService]:
     service = StubOwnerQuestionService()
+    PUSH.answer = None
     test_app = FastAPI()
     test_app.include_router(router)
 
@@ -113,6 +132,7 @@ def make_client() -> tuple[TestClient, StubOwnerQuestionService]:
     test_app.dependency_overrides[get_current_user] = authenticated_user
     test_app.dependency_overrides[get_user_service] = StubUserService
     test_app.dependency_overrides[get_owner_question_service] = lambda: service
+    test_app.dependency_overrides[get_push_service] = lambda: PUSH
     return TestClient(test_app), service
 
 
@@ -190,6 +210,12 @@ def test_answer_question() -> None:
     assert response.json()["answer"] == "카운터 아래 우산 빌려주세요"
     assert response.json()["manualId"] is None
     assert service.seen_answer == ("카운터 아래 우산 빌려주세요", None)
+    assert PUSH.answer == (
+        service.question.asked_by,
+        STORE_ID,
+        service.question.chat_id,
+        "카운터 아래 우산 빌려주세요",
+    )
 
 
 def test_answer_and_add_to_manual() -> None:
