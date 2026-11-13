@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Annotated, Literal
@@ -8,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.dependencies import get_active_user
 from app.api.v1.assistant_chats import get_owner_question_service
+from app.api.v1.push_subscriptions import get_push_service
 from app.integrations.llm import LLMError
 from app.models.user import User
 from app.schemas.owner_question import (
@@ -27,6 +29,7 @@ from app.services.owner_question import (
     OwnerQuestionView,
     question_title,
 )
+from app.services.push import PushService
 from app.services.store import StoreNotFoundError
 from app.services.store_access import StoreAccessForbiddenError
 
@@ -34,6 +37,8 @@ router = APIRouter(
     prefix="/stores/{store_id}/owner-questions",
     tags=["owner-questions"],
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _to_item(view: OwnerQuestionView) -> OwnerQuestionItem:
@@ -119,6 +124,7 @@ async def answer_owner_question(
     request: OwnerQuestionAnswerRequest,
     user: Annotated[User, Depends(get_active_user)],
     service: Annotated[OwnerQuestionService, Depends(get_owner_question_service)],
+    push: Annotated[PushService, Depends(get_push_service)],
 ) -> OwnerQuestionAnswerResponse | JSONResponse:
     """사장님 답변을 저장하고, 요청하면 매뉴얼로도 추가합니다."""
     draft = None
@@ -143,6 +149,16 @@ async def answer_owner_question(
             "OWNER_QUESTION_ALREADY_ANSWERED",
             "이미 답변한 질문이에요",
         )
+    try:
+        await push.notify_owner_answer(
+            view.question.asked_by,
+            store_id,
+            view.question.chat_id,
+            request.answer,
+        )
+    except Exception:
+        # 푸시 장애가 이미 저장된 답변을 실패로 보이게 하면 안 됩니다.
+        logger.exception("Failed to send owner-answer push")
     item = _to_item(view)
     return OwnerQuestionAnswerResponse(
         **item.model_dump(),

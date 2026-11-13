@@ -103,6 +103,29 @@ CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 브라우저에서 `Authorization: Bearer <SUPABASE_ACCESS_TOKEN>` 헤더를 포함한
 요청과 CORS 사전 요청(`OPTIONS`)을 허용합니다.
 
+## PWA Web Push
+
+알바생이 AI 사수의 답변을 사장님께 넘기면 매장 사장님에게, 사장님이 답변하면
+질문을 보낸 알바생에게 Web Push를 전송합니다. 로그인 사용자의 브라우저 구독은
+다음 API로 등록·해제합니다.
+
+| Method | 경로 | 설명 |
+| --- | --- | --- |
+| `POST` | `/api/v1/users/me/push-subscriptions` | 현재 브라우저 구독 등록·갱신 |
+| `DELETE` | `/api/v1/users/me/push-subscriptions` | 현재 브라우저 구독 해제 |
+
+Render에는 같은 VAPID 키 쌍의 서버 설정을 등록합니다. `VAPID_SUBJECT`는 키 소유자에게
+연락할 수 있는 `mailto:` 주소이며, 프론트엔드에는 공개키만 전달합니다.
+
+```dotenv
+VAPID_PUBLIC_KEY=<public-key>
+VAPID_PRIVATE_KEY=<private-key>
+VAPID_SUBJECT=mailto:team@example.com
+```
+
+배포할 때는 새 코드가 병합된 뒤 `alembic upgrade head`로
+`push_subscriptions` 테이블을 먼저 반영하고 서버를 재배포합니다.
+
 ## 초대 코드와 매장 가입
 
 사장님은 자신이 소유한 매장에 직원 이름과 2026년 최저시급 이상의 시급을

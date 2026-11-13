@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Annotated
@@ -8,6 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_active_user, get_llm_client
+from app.api.v1.push_subscriptions import get_push_service
 from app.db.session import get_db
 from app.integrations.llm import LLMClient, LLMError
 from app.models.assistant_chat import AssistantChat, AssistantMessage
@@ -42,6 +44,7 @@ from app.services.owner_question import (
     OwnerQuestionNotAllowedError,
     OwnerQuestionService,
 )
+from app.services.push import PushService
 from app.services.store import StoreNotFoundError
 from app.services.store_access import StoreAccessService
 
@@ -49,6 +52,8 @@ router = APIRouter(
     prefix="/stores/{store_id}/assistant-chats",
     tags=["assistant-chats"],
 )
+
+logger = logging.getLogger(__name__)
 
 
 def get_assistant_chat_service(
@@ -283,6 +288,7 @@ async def ask_owner(
     message_id: UUID,
     user: Annotated[User, Depends(get_active_user)],
     service: Annotated[OwnerQuestionService, Depends(get_owner_question_service)],
+    push: Annotated[PushService, Depends(get_push_service)],
 ) -> OwnerQuestionCreateResponse | JSONResponse:
     """찾지 못한 AI 답변의 질문을 사장님께 넘깁니다."""
     try:
@@ -305,6 +311,11 @@ async def ask_owner(
             "OWNER_QUESTION_ALREADY_SENT",
             "이미 사장님께 물어봤어요",
         )
+    try:
+        await push.notify_owner_question(store_id, question.id, question.question)
+    except Exception:
+        # 푸시 장애가 질문 저장을 실패로 보이게 하면 안 됩니다.
+        logger.exception("Failed to send owner-question push")
     return OwnerQuestionCreateResponse(
         owner_question_id=question.id,
         status=question.status,

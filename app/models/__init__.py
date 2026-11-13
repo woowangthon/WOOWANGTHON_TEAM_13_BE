@@ -12,6 +12,7 @@ from app.models.manual import Manual, ManualCategory
 from app.models.membership import Membership
 from app.models.notification import NotificationRead, ScheduleChangeNotice
 from app.models.owner_question import OwnerQuestion
+from app.models.push_subscription import PushSubscription
 from app.models.recipe import Recipe
 from app.models.schedule import (
     ScheduleAssignment,
@@ -40,6 +41,7 @@ __all__ = [
     "NotificationRead",
     "ScheduleChangeNotice",
     "OwnerQuestion",
+    "PushSubscription",
     "Recipe",
     "ScheduleAssignmentOverride",
     "ScheduleDayOverride",

@@ -9,6 +9,7 @@ from app.api.v1.assistant_chats import (
     get_owner_question_service,
     router,
 )
+from app.api.v1.push_subscriptions import get_push_service
 from app.api.v1.users import get_user_service
 from app.app import app
 from app.core.auth import AuthenticatedUser, get_current_user
@@ -168,10 +169,27 @@ class StubOwnerQuestionService:
 OWNER_QUESTIONS = StubOwnerQuestionService()
 
 
+class StubPushService:
+    def __init__(self) -> None:
+        self.question: tuple[UUID, UUID, str] | None = None
+
+    async def notify_owner_question(
+        self,
+        store_id: UUID,
+        question_id: UUID,
+        question: str,
+    ) -> None:
+        self.question = (store_id, question_id, question)
+
+
+PUSH = StubPushService()
+
+
 def make_client() -> tuple[TestClient, StubChatService]:
     service = StubChatService()
     OWNER_QUESTIONS.error = None
     OWNER_QUESTIONS.asked = {}
+    PUSH.question = None
     test_app = FastAPI()
     test_app.include_router(router)
 
@@ -184,6 +202,7 @@ def make_client() -> tuple[TestClient, StubChatService]:
     test_app.dependency_overrides[get_owner_question_service] = (
         lambda: OWNER_QUESTIONS
     )
+    test_app.dependency_overrides[get_push_service] = lambda: PUSH
     return TestClient(test_app), service
 
 
@@ -390,6 +409,9 @@ def test_ask_owner_returns_question_and_system_message() -> None:
     assert body["question"] == "우산 빌려줘도 돼요?"
     assert body["systemMessage"]["sender"] == "system"
     assert body["systemMessage"]["canAskOwner"] is False
+    assert PUSH.question is not None
+    assert PUSH.question[0] == STORE_ID
+    assert PUSH.question[2] == body["question"]
 
 
 def test_ask_owner_error_codes() -> None:
