@@ -57,6 +57,7 @@ def _to_response(store: Store, owner_name: str) -> StoreResponse:
     """매장 모델을 API 응답 형식으로 변환합니다."""
     return StoreResponse(
         store_id=store.id,
+        created_at=store.created_at,
         name=store.name,
         address=store.address,
         owner_name=owner_name,

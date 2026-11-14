@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -151,6 +152,7 @@ class StoreUpdateRequest(StoreSchema):
 
 class StoreResponse(StoreSchema):
     store_id: UUID
+    created_at: datetime
     name: str
     address: str
     owner_name: str
