@@ -7,6 +7,7 @@ from app.models.business_verification import BusinessVerification
 from app.models.store import Store
 from app.schemas.store import StoreCreateRequest, StoreUpdateRequest
 from app.services.store import (
+    BusinessRegistrationNumberAlreadyUsedError,
     BusinessVerificationRequiredError,
     StoreNotFoundError,
     StoreService,
@@ -21,6 +22,19 @@ class FakeStoreRepository:
         store.id = uuid4()
         self.stores.append(store)
         return store
+
+    async def exists_active_by_business_registration_number(
+        self,
+        business_registration_number: str,
+        *,
+        exclude_store_id: UUID | None = None,
+    ) -> bool:
+        return any(
+            store.business_registration_number == business_registration_number
+            and store.deleted_at is None
+            and store.id != exclude_store_id
+            for store in self.stores
+        )
 
     async def list_by_owner_id(self, owner_id: UUID) -> list[Store]:
         return [
@@ -79,6 +93,7 @@ def make_store(owner_id: UUID, **overrides: object) -> Store:
         "name": "우왕 카페",
         "address": "서울특별시 강남구",
         "business_verification_id": None,
+        "business_registration_number": None,
         "photo_url": None,
         "payday": None,
         "business_size": None,
@@ -92,11 +107,12 @@ def make_verification(
     *,
     verification_id: int = 101,
     status: str = "VERIFIED",
+    business_registration_number: str = "1234567890",
 ) -> BusinessVerification:
     return BusinessVerification(
         id=verification_id,
         requester_id=requester_id,
-        business_registration_number="1234567890",
+        business_registration_number=business_registration_number,
         owner_name="홍길동",
         business_start_date=date(2026, 1, 15),
         status=status,
@@ -133,6 +149,7 @@ async def test_create_store_assigns_authenticated_owner() -> None:
 
     assert store.owner_id == owner_id
     assert store.business_verification_id == 101
+    assert store.business_registration_number == "1234567890"
     assert store.payday == 25
     assert store.business_size == "FIVE_OR_MORE"
     assert repository.stores == [store]
@@ -190,6 +207,57 @@ async def test_create_store_requires_verified_business(
         await service.create(owner_id, request)
 
     assert repository.stores == []
+
+
+@pytest.mark.asyncio
+async def test_create_store_rejects_business_number_used_by_active_store() -> None:
+    owner_id = uuid4()
+    existing = make_store(
+        uuid4(),
+        business_verification_id=100,
+        business_registration_number="1234567890",
+    )
+    repository = FakeStoreRepository([existing])
+    service = make_service(
+        repository,
+        [make_verification(owner_id, verification_id=202)],
+    )
+
+    with pytest.raises(BusinessRegistrationNumberAlreadyUsedError):
+        await service.create(
+            owner_id,
+            StoreCreateRequest(
+                name="새 카페",
+                address="서울특별시 마포구",
+                businessVerificationId=202,
+            ),
+        )
+
+    assert repository.stores == [existing]
+
+
+@pytest.mark.asyncio
+async def test_create_store_allows_number_from_deleted_store() -> None:
+    owner_id = uuid4()
+    deleted = make_store(
+        uuid4(),
+        business_registration_number="1234567890",
+        deleted_at=datetime.now(UTC),
+    )
+    repository = FakeStoreRepository([deleted])
+    service = make_service(repository, [make_verification(owner_id)])
+
+    created = await service.create(
+        owner_id,
+        StoreCreateRequest(
+            name="새 카페",
+            address="서울특별시 마포구",
+            businessVerificationId=101,
+        ),
+    )
+
+    assert created.business_registration_number == "1234567890"
+    assert repository.stores == [deleted, created]
 
 
 @pytest.mark.asyncio
@@ -276,6 +344,42 @@ async def test_update_store_validates_changed_business_verification() -> None:
     )
 
     assert updated.business_verification_id == 202
+    assert updated.business_registration_number == "1234567890"
+
+
+@pytest.mark.asyncio
+async def test_update_store_rejects_business_number_used_by_another_store() -> None:
+    owner_id = uuid4()
+    store = make_store(
+        owner_id,
+        business_verification_id=101,
+        business_registration_number="1234567890",
+    )
+    another_store = make_store(
+        uuid4(),
+        business_verification_id=303,
+        business_registration_number="9999999999",
+    )
+    service = make_service(
+        FakeStoreRepository([store, another_store]),
+        [
+            make_verification(
+                owner_id,
+                verification_id=202,
+                business_registration_number="9999999999",
+            )
+        ],
+    )
+
+    with pytest.raises(BusinessRegistrationNumberAlreadyUsedError):
+        await service.update(
+            store.id,
+            owner_id,
+            StoreUpdateRequest(businessVerificationId=202),
+        )
+
+    assert store.business_verification_id == 101
+    assert store.business_registration_number == "1234567890"
 
 
 @pytest.mark.asyncio

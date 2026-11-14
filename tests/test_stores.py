@@ -13,6 +13,7 @@ from app.models.store import Store
 from app.models.user import User
 from app.schemas.store import StoreCreateRequest, StoreUpdateRequest
 from app.services.store import (
+    BusinessRegistrationNumberAlreadyUsedError,
     BusinessVerificationRequiredError,
     StoreNotFoundError,
 )
@@ -49,6 +50,7 @@ class StubStoreService:
         )
         self.deleted = False
         self.reject_verification = False
+        self.reject_duplicate_business_number = False
 
     async def create(
         self,
@@ -57,6 +59,8 @@ class StubStoreService:
     ) -> Store:
         if self.reject_verification:
             raise BusinessVerificationRequiredError
+        if self.reject_duplicate_business_number:
+            raise BusinessRegistrationNumberAlreadyUsedError
         self.store = Store(
             id=uuid4(),
             owner_id=owner_id,
@@ -186,6 +190,25 @@ def test_create_store_rejects_unverified_business() -> None:
 
     assert response.status_code == 400
     assert response.json() == {"detail": "A verified business registration is required"}
+
+
+def test_create_store_rejects_duplicate_business_number() -> None:
+    client, _, store_service = create_client()
+    store_service.reject_duplicate_business_number = True
+
+    response = client.post(
+        "/api/v1/stores",
+        json={
+            "name": "새 매장",
+            "address": "서울특별시 마포구 1",
+            "businessVerificationId": 202,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "Business registration number is already used by another store"
+    }
 
 
 def test_list_stores_returns_wrapper() -> None:

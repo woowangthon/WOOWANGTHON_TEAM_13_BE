@@ -1,7 +1,8 @@
-from collections.abc import Mapping
 from datetime import UTC, datetime, time
 from typing import Any, Protocol
 from uuid import UUID
+
+from sqlalchemy.exc import IntegrityError
 
 from app.models.business_verification import BusinessVerification
 from app.models.schedule import ShiftTemplate
@@ -18,8 +19,19 @@ class BusinessVerificationRequiredError(Exception):
     """유효한 본인 소유 사업자 인증 결과가 필요합니다."""
 
 
+class BusinessRegistrationNumberAlreadyUsedError(Exception):
+    """이미 활성 매장에 사용 중인 사업자등록번호입니다."""
+
+
 class StoreRepositoryProtocol(Protocol):
     async def create(self, store: Store) -> Store: ...
+
+    async def exists_active_by_business_registration_number(
+        self,
+        business_registration_number: str,
+        *,
+        exclude_store_id: UUID | None = None,
+    ) -> bool: ...
 
     async def list_by_owner_id(self, owner_id: UUID) -> list[Store]: ...
 
@@ -56,15 +68,21 @@ class StoreService:
         request: StoreCreateRequest,
     ) -> Store:
         """로그인한 사용자의 매장을 생성합니다."""
-        await self._require_verified_business(
+        verification = await self._get_verified_business(
             request.business_verification_id,
             owner_id,
+        )
+        await self._require_unused_business_registration_number(
+            verification.business_registration_number,
         )
         store = Store(
             owner_id=owner_id,
             name=request.name,
             address=request.address,
             business_verification_id=request.business_verification_id,
+            business_registration_number=(
+                verification.business_registration_number
+            ),
             photo_url=request.photo_url,
             payday=request.payday,
             business_size=request.business_size,
@@ -82,7 +100,13 @@ class StoreService:
                 for item in request.shift_templates
             ],
         )
-        return await self._repository.create(store)
+        try:
+            return await self._repository.create(store)
+        except IntegrityError:
+            await self._raise_if_business_registration_number_is_used(
+                verification.business_registration_number,
+            )
+            raise
 
     @staticmethod
     def _parse_time(value: str) -> time:
@@ -111,19 +135,34 @@ class StoreService:
     ) -> Store:
         """로그인한 사용자가 소유한 매장 정보를 수정합니다."""
         store = await self.get_for_owner(store_id, owner_id)
-        fields: Mapping[str, Any] = request.model_dump(
+        fields: dict[str, Any] = request.model_dump(
             exclude_unset=True,
             by_alias=False,
         )
         business_verification_id = fields.get("business_verification_id")
         if isinstance(business_verification_id, int):
-            await self._require_verified_business(
+            verification = await self._get_verified_business(
                 business_verification_id,
                 owner_id,
             )
+            await self._require_unused_business_registration_number(
+                verification.business_registration_number,
+                exclude_store_id=store_id,
+            )
+            fields["business_registration_number"] = (
+                verification.business_registration_number
+            )
         for field, value in fields.items():
             setattr(store, field, value)
-        return await self._repository.save(store)
+        try:
+            return await self._repository.save(store)
+        except IntegrityError:
+            if isinstance(business_verification_id, int):
+                await self._raise_if_business_registration_number_is_used(
+                    fields["business_registration_number"],
+                    exclude_store_id=store_id,
+                )
+            raise
 
     async def delete(self, store_id: UUID, owner_id: UUID) -> None:
         """로그인한 사용자가 소유한 매장을 삭제 처리합니다."""
@@ -131,11 +170,11 @@ class StoreService:
         store.deleted_at = datetime.now(UTC)
         await self._repository.save(store)
 
-    async def _require_verified_business(
+    async def _get_verified_business(
         self,
         verification_id: int,
         owner_id: UUID,
-    ) -> None:
+    ) -> BusinessVerification:
         verification = (
             await self._business_verification_repository.get_by_id_and_requester_id(
                 verification_id,
@@ -144,3 +183,28 @@ class StoreService:
         )
         if verification is None or verification.status != VERIFIED_STATUS:
             raise BusinessVerificationRequiredError
+        return verification
+
+    async def _require_unused_business_registration_number(
+        self,
+        business_registration_number: str,
+        *,
+        exclude_store_id: UUID | None = None,
+    ) -> None:
+        if await self._repository.exists_active_by_business_registration_number(
+            business_registration_number,
+            exclude_store_id=exclude_store_id,
+        ):
+            raise BusinessRegistrationNumberAlreadyUsedError
+
+    async def _raise_if_business_registration_number_is_used(
+        self,
+        business_registration_number: str,
+        *,
+        exclude_store_id: UUID | None = None,
+    ) -> None:
+        """동시 생성 경합의 DB 유니크 오류를 도메인 오류로 바꿉니다."""
+        await self._require_unused_business_registration_number(
+            business_registration_number,
+            exclude_store_id=exclude_store_id,
+        )
