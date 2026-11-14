@@ -16,6 +16,7 @@ from app.models.schedule import (
     ScheduleDayShift,
 )
 from app.models.store import Store
+from app.services.schedule_history import assignment_applies, template_on
 
 
 class PayrollRepository:
@@ -204,15 +205,17 @@ class PayrollRepository:
                     shifts[shift.assignee_user_id].append(
                         (
                             cursor,
-                            shift.start_time or shift.template.start_time,
-                            shift.end_time or shift.template.end_time,
+                            shift.start_time
+                            or template_on(shift.template, cursor).start_time,
+                            shift.end_time
+                            or template_on(shift.template, cursor).end_time,
                         )
                     )
             elif cursor.weekday() not in closed_weekdays and (
                 cursor not in korean_holidays
             ):
                 for assignment in schedule_assignments:
-                    if assignment.weekday != cursor.weekday():
+                    if not assignment_applies(assignment, cursor):
                         continue
                     user_id = override_map.get(
                         (assignment.id, cursor), assignment.assignee_user_id
@@ -220,8 +223,8 @@ class PayrollRepository:
                     shifts[user_id].append(
                         (
                             cursor,
-                            assignment.template.start_time,
-                            assignment.template.end_time,
+                            template_on(assignment.template, cursor).start_time,
+                            template_on(assignment.template, cursor).end_time,
                         )
                     )
             cursor += timedelta(days=1)

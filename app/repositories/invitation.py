@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import case, or_, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -10,6 +10,7 @@ from app.models.membership import Membership
 from app.models.schedule import ScheduleAssignment, ShiftTemplate
 from app.models.store import Store
 from app.models.user import User
+from app.services.schedule_history import local_date
 
 InvitationContext = tuple[Invitation, Store, User]
 
@@ -86,7 +87,9 @@ class InvitationRepository:
         return result.scalar_one_or_none()
 
     async def list_shift_template_ids(self, store_id: UUID) -> set[UUID]:
-        query = select(ShiftTemplate.id).where(ShiftTemplate.store_id == store_id)
+        query = select(ShiftTemplate.id).where(
+            ShiftTemplate.store_id == store_id, ShiftTemplate.deleted_from.is_(None)
+        )
         result = await self._session.execute(query)
         return set(result.scalars().all())
 
@@ -120,6 +123,10 @@ class InvitationRepository:
         invitation: Invitation,
         membership: Membership,
     ) -> Membership | None:
+        await self._session.execute(
+            select(Store.id).where(Store.id == invitation.store_id).with_for_update()
+        )
+        joined_on = local_date(membership.joined_at)
         consume_query = (
             update(Invitation)
             .where(
@@ -140,11 +147,35 @@ class InvitationRepository:
             return None
 
         await self._session.execute(
-            delete(ScheduleAssignment).where(
+            update(ScheduleAssignment)
+            .where(
                 ScheduleAssignment.store_id == invitation.store_id,
                 ScheduleAssignment.assignee_user_id == membership.user_id,
+                or_(
+                    ScheduleAssignment.effective_until.is_(None),
+                    ScheduleAssignment.effective_until > joined_on,
+                ),
+            )
+            .values(
+                effective_until=case(
+                    (
+                        ScheduleAssignment.effective_from > joined_on,
+                        ScheduleAssignment.effective_from,
+                    ),
+                    else_=joined_on,
+                )
             )
         )
+        template_rows = await self._session.execute(
+            select(ShiftTemplate.id, ShiftTemplate.deleted_from).where(
+                ShiftTemplate.store_id == invitation.store_id,
+                or_(
+                    ShiftTemplate.deleted_from.is_(None),
+                    ShiftTemplate.deleted_from > joined_on,
+                ),
+            )
+        )
+        active_templates = {row[0]: row[1] for row in template_rows.all()}
         self._session.add_all(
             [
                 ScheduleAssignment(
@@ -152,8 +183,11 @@ class InvitationRepository:
                     template_id=item.template_id,
                     weekday=item.weekday,
                     assignee_user_id=membership.user_id,
+                    effective_from=joined_on,
+                    effective_until=active_templates[item.template_id],
                 )
                 for item in invitation.schedule
+                if item.template_id in active_templates
             ]
         )
 

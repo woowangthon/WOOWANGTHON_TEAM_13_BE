@@ -1,7 +1,7 @@
 from datetime import date, datetime, time
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -18,7 +18,7 @@ from app.models.schedule import (
 from app.models.store import Store
 from app.models.user import User
 
-WorkerRecord = tuple[UUID, UUID | None, str, str]
+WorkerRecord = tuple[UUID, UUID | None, str, str, datetime]
 
 
 class PendingSubstituteRequestExistsError(Exception):
@@ -31,19 +31,20 @@ class ScheduleRepository:
 
     async def list_workers(self, store_id: UUID) -> list[WorkerRecord]:
         owner_query = (
-            select(Store.owner_id, User.nickname)
+            select(Store.owner_id, User.nickname, Store.created_at)
             .join(User, User.id == Store.owner_id)
             .where(Store.id == store_id, Store.deleted_at.is_(None))
         )
         owner = (await self._session.execute(owner_query)).one_or_none()
         if owner is None:
             return []
-        result: list[WorkerRecord] = [(owner[0], None, owner[1], "owner")]
+        result: list[WorkerRecord] = [(owner[0], None, owner[1], "owner", owner[2])]
         staff_query = (
             select(
                 Membership.user_id,
                 Membership.id,
                 Membership.staff_name,
+                Membership.joined_at,
             )
             .where(
                 Membership.store_id == store_id,
@@ -52,7 +53,7 @@ class ScheduleRepository:
             .order_by(Membership.joined_at, Membership.id)
         )
         staff = await self._session.execute(staff_query)
-        result.extend((row[0], row[1], row[2], "staff") for row in staff.all())
+        result.extend((row[0], row[1], row[2], "staff", row[3]) for row in staff.all())
         return result
 
     async def get_store_closure(self, store_id: UUID) -> tuple[list[int], bool]:
@@ -63,6 +64,11 @@ class ScheduleRepository:
         row = (await self._session.execute(query)).one()
         return list(row[0]), row[1]
 
+    async def lock_configuration(self, store_id: UUID) -> None:
+        await self._session.execute(
+            select(Store.id).where(Store.id == store_id).with_for_update()
+        )
+
     async def create_template(self, template: ShiftTemplate) -> ShiftTemplate:
         self._session.add(template)
         await self._commit()
@@ -72,7 +78,9 @@ class ScheduleRepository:
     async def list_templates(self, store_id: UUID) -> list[ShiftTemplate]:
         query = (
             select(ShiftTemplate)
-            .where(ShiftTemplate.store_id == store_id)
+            .where(
+                ShiftTemplate.store_id == store_id, ShiftTemplate.deleted_from.is_(None)
+            )
             .order_by(
                 ShiftTemplate.sort_order, ShiftTemplate.start_time, ShiftTemplate.id
             )
@@ -85,6 +93,7 @@ class ScheduleRepository:
     ) -> ShiftTemplate | None:
         query = select(ShiftTemplate).where(
             ShiftTemplate.id == template_id,
+            ShiftTemplate.deleted_from.is_(None),
             ShiftTemplate.store_id == store_id,
         )
         return (await self._session.execute(query)).scalar_one_or_none()
@@ -95,21 +104,73 @@ class ScheduleRepository:
         await self._session.refresh(template)
         return template
 
-    async def delete_template(self, template: ShiftTemplate) -> None:
-        await self._session.delete(template)
+    async def delete_template(
+        self, template: ShiftTemplate, effective_from: date, changed_at: datetime
+    ) -> None:
+        template.deleted_from = effective_from
+        for assignment in await self.list_assignments(template.store_id):
+            if (
+                assignment.template_id == template.id
+                and assignment.effective_until is None
+            ):
+                assignment.effective_until = effective_from
+        await self._cancel_pending(template.store_id, effective_from, changed_at)
+        self._session.add(template)
         await self._commit()
+
+    async def _cancel_pending(
+        self, store_id: UUID, effective_from: date, changed_at: datetime
+    ) -> None:
+        result = await self._session.execute(
+            select(SubstituteRequest)
+            .join(
+                ScheduleAssignment,
+                ScheduleAssignment.id == SubstituteRequest.schedule_assignment_id,
+            )
+            .where(
+                SubstituteRequest.store_id == store_id,
+                SubstituteRequest.status == "PENDING",
+                SubstituteRequest.work_date >= effective_from,
+                ScheduleAssignment.effective_until.is_not(None),
+                SubstituteRequest.work_date >= ScheduleAssignment.effective_until,
+            )
+        )
+        for request in result.scalars():
+            request.status = "CANCELLED"
+            request.responded_at = changed_at
 
     async def replace_assignments(
         self,
         store_id: UUID,
         assignments: list[ScheduleAssignment],
+        effective_from: date,
+        changed_at: datetime,
     ) -> list[ScheduleAssignment]:
-        await self._session.execute(
-            delete(ScheduleAssignment).where(ScheduleAssignment.store_id == store_id)
-        )
-        self._session.add_all(assignments)
+        def key(item: ScheduleAssignment) -> tuple[UUID, int, UUID]:
+            return item.template_id, item.weekday, item.assignee_user_id
+
+        current = {
+            key(item): item
+            for item in await self.list_assignments(store_id)
+            if item.effective_until is None
+        }
+        desired = {key(item): item for item in assignments}
+        for identity, item in current.items():
+            if identity not in desired:
+                item.effective_until = effective_from
+        # Close old intervals before inserting replacements with the same key.
+        await self._session.flush()
+        for identity, item in desired.items():
+            if identity not in current:
+                item.effective_from = effective_from
+                self._session.add(item)
+        await self._cancel_pending(store_id, effective_from, changed_at)
         await self._commit()
-        return await self.list_assignments(store_id)
+        return [
+            item
+            for item in await self.list_assignments(store_id)
+            if item.effective_until is None
+        ]
 
     async def list_assignments(self, store_id: UUID) -> list[ScheduleAssignment]:
         query = (

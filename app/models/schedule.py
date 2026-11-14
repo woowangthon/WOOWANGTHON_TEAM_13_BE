@@ -2,6 +2,7 @@ from datetime import date, datetime, time
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     Date,
     DateTime,
@@ -29,7 +30,14 @@ class ShiftTemplate(Base):
         CheckConstraint(
             "headcount BETWEEN 1 AND 10", name="ck_shift_templates_headcount"
         ),
-        UniqueConstraint("store_id", "name", name="uq_shift_templates_store_name"),
+        Index(
+            "uq_shift_templates_store_name",
+            "store_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_from IS NULL"),
+            sqlite_where=text("deleted_from IS NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -38,6 +46,13 @@ class ShiftTemplate(Base):
         ForeignKey("stores.id", ondelete="CASCADE"),
         index=True,
         nullable=False,
+    )
+    effective_from: Mapped[date] = mapped_column(
+        Date, default=date.min, server_default="0001-01-01", nullable=False
+    )
+    deleted_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    history: Mapped[list[dict[str, str | int]]] = mapped_column(
+        JSON, default=list, server_default="[]", nullable=False
     )
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     start_time: Mapped[time] = mapped_column(Time, nullable=False)
@@ -67,11 +82,18 @@ class ScheduleAssignment(Base):
             "weekday BETWEEN 0 AND 6",
             name="ck_schedule_assignment_weekday",
         ),
-        UniqueConstraint(
+        CheckConstraint(
+            "effective_until IS NULL OR effective_until >= effective_from",
+            name="ck_schedule_assignment_period",
+        ),
+        Index(
+            "uq_schedule_assignment_template_weekday_assignee",
             "template_id",
             "weekday",
             "assignee_user_id",
-            name="uq_schedule_assignment_template_weekday_assignee",
+            unique=True,
+            postgresql_where=text("effective_until IS NULL"),
+            sqlite_where=text("effective_until IS NULL"),
         ),
     )
 
@@ -88,6 +110,10 @@ class ScheduleAssignment(Base):
         index=True,
         nullable=False,
     )
+    effective_from: Mapped[date] = mapped_column(
+        Date, default=date.min, server_default="0001-01-01", nullable=False
+    )
+    effective_until: Mapped[date | None] = mapped_column(Date, nullable=True)
     weekday: Mapped[int] = mapped_column(Integer, nullable=False)
     assignee_user_id: Mapped[UUID] = mapped_column(
         Uuid,

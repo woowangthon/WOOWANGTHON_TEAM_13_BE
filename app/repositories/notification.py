@@ -23,6 +23,7 @@ from app.services.notification import (
     UncheckedItem,
     Viewer,
 )
+from app.services.schedule_history import template_on
 
 SUBSTITUTE_ACCEPTED_STATUS = "ACCEPTED"
 SUBSTITUTE_CANCELLED_STATUS = "CANCELLED"
@@ -90,8 +91,7 @@ class NotificationRepository:
             select(
                 SubstituteRequest.id,
                 SubstituteRequest.work_date,
-                ShiftTemplate.start_time,
-                ShiftTemplate.end_time,
+                ShiftTemplate,
                 name,
                 at,
             )
@@ -108,7 +108,17 @@ class NotificationRepository:
             .where(SubstituteRequest.store_id == store_id, *conditions)
         )
         rows = (await self._session.execute(query)).all()
-        return [SubstituteEvent(*row) for row in rows]
+        return [
+            SubstituteEvent(
+                row[0],
+                row[1],
+                template_on(row[2], row[1]).start_time,
+                template_on(row[2], row[1]).end_time,
+                row[3],
+                row[4],
+            )
+            for row in rows
+        ]
 
     async def list_received_substitutes(
         self,

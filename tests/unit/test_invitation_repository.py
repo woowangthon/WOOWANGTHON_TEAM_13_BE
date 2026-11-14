@@ -143,6 +143,7 @@ async def test_accept_moves_invitation_schedule_to_fixed_schedule(
         select(ScheduleAssignment).where(
             ScheduleAssignment.store_id == store.id,
             ScheduleAssignment.assignee_user_id == staff.id,
+            ScheduleAssignment.effective_until.is_(None),
         )
     ).all()
     accepted_by_user_id = session.scalar(

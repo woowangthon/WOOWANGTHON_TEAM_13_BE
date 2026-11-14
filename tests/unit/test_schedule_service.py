@@ -64,6 +64,9 @@ class StubRepository:
         self.closed_weekdays: list[int] = []
         self.closed_on_holidays = False
 
+    async def lock_configuration(self, store_id: UUID):
+        pass
+
     async def get_store_closure(self, store_id: UUID):
         return self.closed_weekdays, self.closed_on_holidays
 
@@ -88,8 +91,8 @@ class StubRepository:
 
     async def list_workers(self, store_id: UUID):
         return [
-            (OWNER_ID, None, "박 사장", "owner"),
-            (STAFF_ID, MEMBER_ID, "지은", "staff"),
+            (OWNER_ID, None, "박 사장", "owner", NOW),
+            (STAFF_ID, MEMBER_ID, "지은", "staff", NOW),
         ]
 
     async def list_assignments(self, store_id: UUID):
