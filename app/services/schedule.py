@@ -31,6 +31,12 @@ from app.services.schedule_change import (
     ScheduleChangeRecorderProtocol,
     diff_day_shifts,
 )
+from app.services.schedule_history import (
+    assignment_applies,
+    local_date,
+    remember_template,
+    template_on,
+)
 from app.services.store_access import StoreAccessProtocol
 
 logger = logging.getLogger(__name__)
@@ -84,6 +90,7 @@ class ScheduleWorker:
     member_id: UUID | None
     name: str
     role: Literal["owner", "staff"]
+    joined_on: date = date.min
 
 
 @dataclass(frozen=True)
@@ -100,6 +107,7 @@ class CalendarOccurrence:
 
 
 class ScheduleRepositoryProtocol(Protocol):
+    async def lock_configuration(self, store_id: UUID) -> None: ...
     async def list_workers(self, store_id: UUID) -> list[WorkerRecord]: ...
     async def get_store_closure(self, store_id: UUID) -> tuple[list[int], bool]: ...
     async def create_template(self, template: ShiftTemplate) -> ShiftTemplate: ...
@@ -108,9 +116,15 @@ class ScheduleRepositoryProtocol(Protocol):
         self, store_id: UUID, template_id: UUID
     ) -> ShiftTemplate | None: ...
     async def save_template(self, template: ShiftTemplate) -> ShiftTemplate: ...
-    async def delete_template(self, template: ShiftTemplate) -> None: ...
+    async def delete_template(
+        self, template: ShiftTemplate, effective_from: date, changed_at: datetime
+    ) -> None: ...
     async def replace_assignments(
-        self, store_id: UUID, assignments: list[ScheduleAssignment]
+        self,
+        store_id: UUID,
+        assignments: list[ScheduleAssignment],
+        effective_from: date,
+        changed_at: datetime,
     ) -> list[ScheduleAssignment]: ...
     async def list_assignments(self, store_id: UUID) -> list[ScheduleAssignment]: ...
     async def get_assignment(
@@ -212,6 +226,7 @@ class ScheduleService:
                 member_id=item[1],
                 name=item[2],
                 role=cast(Literal["owner", "staff"], item[3]),
+                joined_on=local_date(item[4]),
             )
             for item in records
         ]
@@ -249,9 +264,15 @@ class ScheduleService:
         request: ShiftTemplateUpdateRequest,
     ) -> ShiftTemplate:
         await self._store_access.ensure_owner(store_id, user_id)
+        await self._repository.lock_configuration(store_id)
         template = await self._repository.get_template(store_id, template_id)
         if template is None:
             raise ShiftTemplateNotFoundError
+        start = _parse_time(request.start) if request.start else template.start_time
+        end = _parse_time(request.end) if request.end else template.end_time
+        if end <= start:
+            raise ValueError("end must be later than start")
+        remember_template(template, local_date(self._clock()) + timedelta(days=1))
         if request.name is not None:
             template.name = request.name
         if request.start is not None:
@@ -272,10 +293,14 @@ class ScheduleService:
         self, store_id: UUID, template_id: UUID, user_id: UUID
     ) -> None:
         await self._store_access.ensure_owner(store_id, user_id)
+        await self._repository.lock_configuration(store_id)
         template = await self._repository.get_template(store_id, template_id)
         if template is None:
             raise ShiftTemplateNotFoundError
-        await self._repository.delete_template(template)
+        now = self._clock()
+        await self._repository.delete_template(
+            template, local_date(now) + timedelta(days=1), now
+        )
 
     async def replace_schedule(
         self,
@@ -284,6 +309,7 @@ class ScheduleService:
         inputs: list[ScheduleAssignmentInput],
     ) -> list[ScheduleAssignment]:
         await self._store_access.ensure_owner(store_id, user_id)
+        await self._repository.lock_configuration(store_id)
         templates = {
             item.id for item in await self._repository.list_templates(store_id)
         }
@@ -301,14 +327,18 @@ class ScheduleService:
             )
             for item in inputs
         ]
-        return await self._repository.replace_assignments(store_id, assignments)
+        now = self._clock()
+        return await self._repository.replace_assignments(
+            store_id, assignments, local_date(now) + timedelta(days=1), now
+        )
 
     async def schedule(
         self, store_id: UUID, user_id: UUID
     ) -> tuple[list[ScheduleAssignment], dict[UUID, ScheduleWorker]]:
         await self._store_access.ensure_member(store_id, user_id)
         workers = {item.user_id: item for item in await self._workers(store_id)}
-        return await self._repository.list_assignments(store_id), workers
+        assignments = await self._repository.list_assignments(store_id)
+        return [item for item in assignments if item.effective_until is None], workers
 
     async def replace_daily_schedule(
         self,
@@ -319,12 +349,15 @@ class ScheduleService:
     ) -> tuple[ScheduleDayOverride, dict[UUID, ScheduleWorker]]:
         await self._store_access.ensure_owner(store_id, user_id)
         templates = {
-            item.id: item for item in await self._repository.list_templates(store_id)
+            item.id: template_on(item, work_date)
+            for item in await self._repository.list_templates(store_id)
         }
         workers = {item.user_id: item for item in await self._workers(store_id)}
         if any(item.template_id not in templates for item in inputs):
             raise ShiftTemplateNotFoundError
         if any(item.assignee_user_id not in workers for item in inputs):
+            raise InvalidScheduleWorkerError
+        if any(workers[item.assignee_user_id].joined_on > work_date for item in inputs):
             raise InvalidScheduleWorkerError
         self._validate_daily_conflicts(inputs, templates)
         before = await self._day_shifts(store_id, user_id, work_date)
@@ -336,8 +369,12 @@ class ScheduleService:
                 (
                     item.template_id,
                     item.assignee_user_id,
-                    _parse_time(item.start) if item.start is not None else None,
-                    _parse_time(item.end) if item.end is not None else None,
+                    _parse_time(item.start)
+                    if item.start is not None
+                    else templates[item.template_id].start_time,
+                    _parse_time(item.end)
+                    if item.end is not None
+                    else templates[item.template_id].end_time,
                 )
                 for item in inputs
             ],
@@ -433,9 +470,11 @@ class ScheduleService:
                     CalendarOccurrence(
                         assignment_id=None,
                         daily_shift_id=shift.id,
-                        template=shift.template,
-                        start_time=shift.start_time or shift.template.start_time,
-                        end_time=shift.end_time or shift.template.end_time,
+                        template=template_on(shift.template, cursor),
+                        start_time=shift.start_time
+                        or template_on(shift.template, cursor).start_time,
+                        end_time=shift.end_time
+                        or template_on(shift.template, cursor).end_time,
                         work_date=cursor,
                         assignee_user_id=shift.assignee_user_id,
                         substituted=False,
@@ -451,16 +490,16 @@ class ScheduleService:
                 cursor += timedelta(days=1)
                 continue
             for assignment in assignments:
-                if assignment.weekday != cursor.weekday():
+                if not assignment_applies(assignment, cursor):
                     continue
                 override_user = override_map.get((assignment.id, cursor))
                 occurrences.append(
                     CalendarOccurrence(
                         assignment_id=assignment.id,
                         daily_shift_id=None,
-                        template=assignment.template,
-                        start_time=assignment.template.start_time,
-                        end_time=assignment.template.end_time,
+                        template=template_on(assignment.template, cursor),
+                        start_time=template_on(assignment.template, cursor).start_time,
+                        end_time=template_on(assignment.template, cursor).end_time,
                         work_date=cursor,
                         assignee_user_id=(override_user or assignment.assignee_user_id),
                         substituted=override_user is not None,
@@ -488,15 +527,19 @@ class ScheduleService:
         target_user_id: UUID,
     ) -> tuple[SubstituteRequest, dict[UUID, ScheduleWorker]]:
         await self._store_access.ensure_member(store_id, requester_user_id)
+        await self._repository.lock_configuration(store_id)
         if await self._repository.get_day_override(store_id, work_date) is not None:
             raise SubstituteRequestConflictError
         assignment = await self._repository.get_assignment(store_id, assignment_id)
-        if assignment is None or assignment.weekday != work_date.weekday():
+        if assignment is None or not assignment_applies(assignment, work_date):
             raise ScheduleAssignmentNotFoundError
         if work_date < self._clock().astimezone(SEOUL).date():
             raise SubstitutePastDateError
         workers = {item.user_id: item for item in await self._workers(store_id)}
-        if target_user_id not in workers:
+        if (
+            target_user_id not in workers
+            or workers[target_user_id].joined_on > work_date
+        ):
             raise InvalidScheduleWorkerError
         current_user_id = await self._effective_assignee(assignment, work_date)
         if current_user_id != requester_user_id:
@@ -548,6 +591,7 @@ class ScheduleService:
         accept: bool,
     ) -> tuple[SubstituteRequest, dict[UUID, ScheduleWorker]]:
         await self._store_access.ensure_member(store_id, user_id)
+        await self._repository.lock_configuration(store_id)
         request = await self._repository.get_request(
             store_id, request_id, for_update=True
         )
@@ -559,6 +603,8 @@ class ScheduleService:
             raise SubstituteRequestConflictError
         if accept:
             assignment = request.assignment
+            if not assignment_applies(assignment, request.work_date):
+                raise SubstituteRequestConflictError
             current_user_id = await self._effective_assignee(
                 assignment, request.work_date
             )
@@ -617,7 +663,7 @@ class ScheduleService:
         target_user_id: UUID,
     ) -> None:
         assignments = await self._repository.list_assignments(store_id)
-        same_day = [item for item in assignments if item.weekday == work_date.weekday()]
+        same_day = [item for item in assignments if assignment_applies(item, work_date)]
         overrides = await self._repository.list_overrides(
             [item.id for item in same_day], work_date, work_date
         )
@@ -631,9 +677,9 @@ class ScheduleService:
             if assignee != target_user_id:
                 continue
             if _overlaps(
-                requested.template.start_time,
-                requested.template.end_time,
-                assignment.template.start_time,
-                assignment.template.end_time,
+                template_on(requested.template, work_date).start_time,
+                template_on(requested.template, work_date).end_time,
+                template_on(assignment.template, work_date).start_time,
+                template_on(assignment.template, work_date).end_time,
             ):
                 raise SubstituteTargetConflictError

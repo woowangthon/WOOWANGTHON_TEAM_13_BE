@@ -54,6 +54,7 @@ from app.services.schedule import (
     SubstituteRequestNotFoundError,
     SubstituteTargetConflictError,
 )
+from app.services.schedule_history import template_on
 from app.services.store import StoreNotFoundError
 from app.services.store_access import StoreAccessForbiddenError, StoreAccessService
 
@@ -147,14 +148,15 @@ def _request_response(
     item: SubstituteRequest,
     workers: dict[UUID, ScheduleWorker],
 ) -> SubstituteRequestResponse:
+    template = template_on(item.assignment.template, item.work_date)
     return SubstituteRequestResponse(
         request_id=item.id,
         status=cast(SubstituteRequestStatus, item.status),
         date=item.work_date,
         assignment_id=item.schedule_assignment_id,
-        shift_name=item.assignment.template.name,
-        start=_time_text(item.assignment.template.start_time),
-        end=_time_text(item.assignment.template.end_time),
+        shift_name=template.name,
+        start=_time_text(template.start_time),
+        end=_time_text(template.end_time),
         requester=_worker_response(_worker(workers, item.requester_user_id)),
         target=_worker_response(_worker(workers, item.target_user_id)),
         is_read=item.target_read_at is not None,
@@ -366,9 +368,11 @@ async def replace_daily_schedule(
                 CalendarOccurrence(
                     assignment_id=None,
                     daily_shift_id=shift.id,
-                    template=shift.template,
-                    start_time=shift.start_time or shift.template.start_time,
-                    end_time=shift.end_time or shift.template.end_time,
+                    template=template_on(shift.template, work_date),
+                    start_time=shift.start_time
+                    or template_on(shift.template, work_date).start_time,
+                    end_time=shift.end_time
+                    or template_on(shift.template, work_date).end_time,
                     work_date=work_date,
                     assignee_user_id=shift.assignee_user_id,
                     substituted=False,
