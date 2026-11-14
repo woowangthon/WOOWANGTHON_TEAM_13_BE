@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Uuid,
@@ -36,6 +37,17 @@ class Store(Base):
             "business_size IS NULL OR business_size IN ('UNDER_FIVE', 'FIVE_OR_MORE')",
             name="ck_stores_business_size",
         ),
+        Index(
+            "uq_stores_active_business_registration_number",
+            "business_registration_number",
+            unique=True,
+            postgresql_where=text(
+                "deleted_at IS NULL AND business_registration_number IS NOT NULL"
+            ),
+            sqlite_where=text(
+                "deleted_at IS NULL AND business_registration_number IS NOT NULL"
+            ),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -50,6 +62,10 @@ class Store(Base):
     business_verification_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("business_verifications.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    business_registration_number: Mapped[str | None] = mapped_column(
+        String(10),
         nullable=True,
     )
     photo_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)

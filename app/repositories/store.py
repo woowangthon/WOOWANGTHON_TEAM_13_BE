@@ -1,9 +1,10 @@
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.business_verification import BusinessVerification
 from app.models.store import Store
 
 
@@ -22,6 +23,28 @@ class StoreRepository:
             raise
         await self._session.refresh(store)
         return store
+
+    async def exists_active_by_business_registration_number(
+        self,
+        business_registration_number: str,
+        *,
+        exclude_store_id: UUID | None = None,
+    ) -> bool:
+        """같은 사업자번호를 사용하는 활성 매장이 있는지 확인합니다."""
+        conditions = [
+            BusinessVerification.business_registration_number
+            == business_registration_number,
+            Store.deleted_at.is_(None),
+        ]
+        if exclude_store_id is not None:
+            conditions.append(Store.id != exclude_store_id)
+        query = select(
+            exists().where(
+                Store.business_verification_id == BusinessVerification.id,
+                *conditions,
+            )
+        )
+        return bool(await self._session.scalar(query))
 
     async def list_by_owner_id(self, owner_id: UUID) -> list[Store]:
         """소유자가 관리하는 활성 매장 목록을 조회합니다."""

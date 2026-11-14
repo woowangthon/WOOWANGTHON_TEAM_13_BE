@@ -19,6 +19,7 @@ from app.schemas.store import (
     StoreUpdateRequest,
 )
 from app.services.store import (
+    BusinessRegistrationNumberAlreadyUsedError,
     BusinessVerificationRequiredError,
     StoreNotFoundError,
     StoreService,
@@ -99,6 +100,11 @@ async def create_store(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="A verified business registration is required",
         ) from None
+    except BusinessRegistrationNumberAlreadyUsedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Business registration number is already used by another store",
+        ) from None
     return _to_response(store, owner.nickname)
 
 
@@ -150,6 +156,11 @@ async def update_store(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="A verified business registration is required",
+        ) from None
+    except BusinessRegistrationNumberAlreadyUsedError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Business registration number is already used by another store",
         ) from None
     return _to_response(store, owner.nickname)
 
