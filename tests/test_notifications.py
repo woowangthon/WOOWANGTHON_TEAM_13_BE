@@ -134,6 +134,7 @@ def test_list_notifications_shape() -> None:
     assert first["target"] == {
         "kind": "substitute_request",
         "id": str(service.notifications[0].target_id),
+        "workDate": None,
     }
     banner = body["banner"]
     assert banner["startTime"] == "09:00"
@@ -168,3 +169,15 @@ def test_stranger_gets_404() -> None:
 
     assert client.get(url()).status_code == 404
     assert client.post(url("/read")).status_code == 404
+
+
+def test_handover_target_uses_work_date_instead_of_notification_date() -> None:
+    client, service = make_client()
+    service.notifications = [Notification(
+        notification_id="handover", type="HANDOVER_CREATED", title="인수인계",
+        body="내용", created_at=NOW, target_kind="handover", target_id=uuid4(),
+        work_date=date(2026, 11, 5),
+    )]
+    response = client.get(url())
+    assert response.status_code == 200
+    assert response.json()["notifications"][0]["target"]["workDate"] == "2026-11-05"
