@@ -5,12 +5,13 @@ import pytest
 
 from app.core.auth import AuthenticatedUser
 from app.models.user import User
-from app.services.user import InactiveUserError, UserService
+from app.services.user import UserService
 
 
 class FakeUserRepository:
     def __init__(self, user: User | None = None) -> None:
         self.user = user
+        self.users = [] if user is None else [user]
 
     async def get_by_auth_user_id(
         self,
@@ -18,15 +19,18 @@ class FakeUserRepository:
         *,
         include_deleted: bool = False,
     ) -> User | None:
-        if self.user is None or self.user.auth_user_id != auth_user_id:
-            return None
-        if not include_deleted and self.user.deleted_at is not None:
-            return None
-        return self.user
+        for user in self.users:
+            if user.auth_user_id != auth_user_id:
+                continue
+            if not include_deleted and user.deleted_at is not None:
+                return None
+            return user
+        return None
 
     async def create(self, user: User) -> User:
         user.id = uuid4()
         self.user = user
+        self.users.append(user)
         return user
 
     async def save(self, user: User) -> User:
@@ -94,7 +98,7 @@ async def test_update_nickname_creates_user_when_needed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_withdraw_redacts_profile_and_keeps_auth_tombstone() -> None:
+async def test_withdraw_redacts_profile_and_detaches_auth_identity() -> None:
     auth_user = identity()
     existing = User(
         id=uuid4(),
@@ -105,11 +109,19 @@ async def test_withdraw_redacts_profile_and_keeps_auth_tombstone() -> None:
     )
     repository = FakeUserRepository(existing)
     service = UserService(repository)
+    original_user_id = existing.id
 
     await service.withdraw(auth_user)
 
+    assert existing.id == original_user_id
+    assert existing.auth_user_id != auth_user.id
     assert existing.nickname == "탈퇴한 사용자"
     assert existing.email is None
     assert existing.deleted_at is not None
-    with pytest.raises(InactiveUserError):
-        await service.get_or_create(auth_user)
+
+    recreated = await service.get_or_create(auth_user)
+
+    assert recreated is not existing
+    assert recreated.auth_user_id == auth_user.id
+    assert recreated.deleted_at is None
+    assert repository.users == [existing, recreated]
