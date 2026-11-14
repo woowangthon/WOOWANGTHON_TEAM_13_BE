@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.exc import IntegrityError
 
@@ -79,7 +79,8 @@ class UserService:
         if user is None or user.deleted_at is not None:
             return
 
-        # 유효한 토큰으로 계정이 다시 생성되지 않도록 인증 ID는 유지합니다.
+        # 같은 인증 계정으로 다시 로그인하면 새 사용자로 시작하도록 연결을 끊습니다.
+        user.auth_user_id = uuid4()
         user.nickname = "탈퇴한 사용자"
         user.email = None
         user.deleted_at = datetime.now(UTC)
