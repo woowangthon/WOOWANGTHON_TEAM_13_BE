@@ -216,7 +216,13 @@ class NotificationRepository:
         """다른 사람이 남긴 인수인계를 작성자 이름과 함께 조회합니다."""
         name, user, member = self._name_of()
         query = (
-            select(HandoverNote.id, name, HandoverNote.summary, HandoverNote.created_at)
+            select(
+                HandoverNote.id,
+                name,
+                HandoverNote.summary,
+                HandoverNote.created_at,
+                HandoverNote.work_date,
+            )
             .join(user, user.id == HandoverNote.author_id)
             .outerjoin(
                 member,

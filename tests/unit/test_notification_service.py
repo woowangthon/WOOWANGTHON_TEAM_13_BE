@@ -202,7 +202,9 @@ async def test_staff_feed_has_substitutes_and_answers_newest_first(
 
 async def test_owner_feed_has_handovers_and_questions(harness: Harness) -> None:
     harness.repository.handovers = [
-        HandoverEvent(uuid4(), "민지", "우유 2팩 남음 " * 10, at(5))
+        HandoverEvent(
+            uuid4(), "민지", "우유 2팩 남음 " * 10, at(5), TODAY - timedelta(days=3)
+        )
     ]
     harness.repository.questions = [
         QuestionEvent(uuid4(), "민수", "쓰레받기 어딨어?", at(1))
@@ -215,6 +217,7 @@ async def test_owner_feed_has_handovers_and_questions(harness: Harness) -> None:
     assert question_item.type == OWNER_QUESTION_ASKED
     assert question_item.title == "민수님의 질문"
     assert question_item.target_kind == "owner_question"
+    assert handover_item.work_date == TODAY - timedelta(days=3)
     assert handover_item.type == HANDOVER_CREATED
     assert handover_item.title == "민지님이 인수인계를 남겼어요"
     assert handover_item.body.endswith("…")

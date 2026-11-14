@@ -315,7 +315,7 @@ async def test_owner_sees_staff_handovers_and_questions(
     session: Session,
     world: World,
 ) -> None:
-    note = world.handover(world.minsu, [("우유", False)])
+    note = world.handover(world.minsu, [("우유", False)], work_date=date(2026, 11, 5))
     world.handover(world.owner_id, [("사장님 메모", False)])
     world.handover(world.jieun, [("삭제됨", False)], deleted=True)
     question = world.question(world.jieun)
@@ -324,6 +324,7 @@ async def test_owner_sees_staff_handovers_and_questions(
     handovers = await repository.list_handovers(world.store.id, world.owner_id, SINCE)
     questions = await repository.list_owner_questions(world.store.id, SINCE)
 
+    assert handovers[0].work_date == date(2026, 11, 5)
     assert [(event.note_id, event.author_name) for event in handovers] == [
         (note.id, "민수")
     ]

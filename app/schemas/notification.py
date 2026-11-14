@@ -21,6 +21,7 @@ class NotificationSchema(BaseModel):
 class NotificationTarget(NotificationSchema):
     kind: str
     id: UUID
+    work_date: date | None = None
 
 
 class NotificationItem(NotificationSchema):

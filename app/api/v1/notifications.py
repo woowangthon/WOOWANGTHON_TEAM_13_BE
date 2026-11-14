@@ -74,7 +74,9 @@ def _to_response(feed: NotificationFeed) -> NotificationListResponse:
                 body=item.body,
                 created_at=item.created_at,
                 is_read=is_read(item, feed.last_read_at),
-                target=NotificationTarget(kind=item.target_kind, id=item.target_id),
+                target=NotificationTarget(
+                    kind=item.target_kind, id=item.target_id, work_date=item.work_date
+                ),
             )
             for item in feed.notifications
         ],

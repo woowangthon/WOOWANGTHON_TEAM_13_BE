@@ -68,6 +68,7 @@ class HandoverEvent:
     author_name: str
     summary: str
     at: datetime
+    work_date: date
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +104,7 @@ class Notification:
     created_at: datetime
     target_kind: str
     target_id: UUID
+    work_date: date | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -407,6 +409,7 @@ class NotificationService:
                 created_at=event.at,
                 target_kind="handover",
                 target_id=event.note_id,
+                work_date=event.work_date,
             )
             for event in handovers
         ]
