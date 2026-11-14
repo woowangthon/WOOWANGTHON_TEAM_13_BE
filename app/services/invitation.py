@@ -162,6 +162,7 @@ class InvitationService:
                 code=self._code_generator(),
                 staff_name=request.staff_name,
                 hourly_wage=request.hourly_wage,
+                tax_type=request.tax_type,
                 schedule=self._schedule_entries(request.schedule),
             )
             try:
@@ -208,6 +209,8 @@ class InvitationService:
             if existing is not None and existing.id != invitation.id:
                 raise InvitationAlreadyAvailableError(existing)
             invitation.staff_name = request.staff_name
+        if request.tax_type is not None:
+            invitation.tax_type = request.tax_type
         if request.hourly_wage is not None:
             invitation.hourly_wage = request.hourly_wage
         if request.schedule is not None:
@@ -296,13 +299,14 @@ class InvitationService:
                 role="staff",
                 staff_name=staff_name,
                 hourly_wage=hourly_wage,
-                tax_type="none",
+                tax_type=invitation.tax_type or "none",
                 joined_at=now,
             )
         else:
             membership.role = "staff"
             membership.staff_name = staff_name
             membership.hourly_wage = hourly_wage
+            membership.tax_type = invitation.tax_type or "none"
             membership.joined_at = now
             membership.left_at = None
         try:

@@ -23,14 +23,15 @@ class Invitation(Base):
 
     __tablename__ = "invitations"
     __table_args__ = (
+        CheckConstraint(
+            "tax_type IN ('none', '3.3', 'ins')", name="ck_invitations_tax_type"
+        ),
         Index(
             "uq_invitations_available_store_staff_name",
             "store_id",
             "staff_name",
             unique=True,
-            postgresql_where=text(
-                "revoked_at IS NULL AND accepted_at IS NULL"
-            ),
+            postgresql_where=text("revoked_at IS NULL AND accepted_at IS NULL"),
         ),
     )
 
@@ -54,6 +55,9 @@ class Invitation(Base):
     )
     staff_name: Mapped[str] = mapped_column(String(50), nullable=False)
     hourly_wage: Mapped[int] = mapped_column(Integer, nullable=False)
+    tax_type: Mapped[str] = mapped_column(
+        String(16), default="none", server_default="none", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
