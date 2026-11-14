@@ -78,6 +78,7 @@ class StubInvitationService:
             raise self.create_error
         self.invitation.staff_name = request.staff_name
         self.invitation.hourly_wage = request.hourly_wage
+        self.invitation.tax_type = request.tax_type
         self.invitation.schedule = [
             InvitationScheduleAssignment(
                 template_id=item.template_id,
@@ -300,6 +301,7 @@ def test_owner_creates_invitation() -> None:
         "code": "K7P2QX",
         "staffName": "지은",
         "hourlyWage": 10_320,
+        "taxType": "none",
         "schedule": [],
         "createdAt": service.invitation.created_at.isoformat().replace(
             "+00:00",
@@ -623,3 +625,19 @@ def test_owner_cannot_update_left_member_tax_type() -> None:
         "message": "퇴사한 구성원의 공제 유형은 변경할 수 없어요",
         "detail": None,
     }
+
+
+def test_create_invitation_passes_tax_type_and_rejects_unknown_values() -> None:
+    client, service = create_client()
+    url = f"/api/v1/stores/{service.store.id}/invitations"
+    for tax_type in ["none", "3.3", "ins"]:
+        response = client.post(url, json={
+            "staffName": "지은", "hourlyWage": 10_320, "taxType": tax_type,
+        })
+        assert response.status_code == 201
+        assert response.json()["taxType"] == tax_type
+    for invalid in [None, "freelance", 3.3]:
+        response = client.post(url, json={
+            "staffName": "지은", "hourlyWage": 10_320, "taxType": invalid,
+        })
+        assert response.status_code == 422
