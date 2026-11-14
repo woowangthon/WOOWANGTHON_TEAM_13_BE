@@ -475,3 +475,33 @@ async def test_used_invitation_cannot_be_revoked() -> None:
             context[1].id,
             context[0].id,
         )
+
+
+@pytest.mark.parametrize("tax_type", ["none", "3.3", "ins"])
+@pytest.mark.parametrize("rejoining", [False, True])
+async def test_join_uses_invitation_tax_type(tax_type, rejoining) -> None:
+    invitation, store, owner = make_context()
+    invitation.tax_type = tax_type
+    user_id = uuid4()
+    repository = FakeInvitationRepository((invitation, store, owner))
+    if rejoining:
+        repository.membership = Membership(
+            id=uuid4(), store_id=store.id, user_id=user_id, staff_name="이전 이름",
+            hourly_wage=11000, tax_type="ins", left_at=datetime.now(UTC),
+        )
+    member, _ = await InvitationService(repository).join(invitation.code, user_id)
+    assert member.tax_type == tax_type
+
+
+async def test_invitation_tax_type_is_saved_and_can_be_updated_before_join() -> None:
+    _, store, owner = make_context()
+    repository = FakeInvitationRepository()
+    service = InvitationService(repository)
+    invitation = await service.create(store, owner.id, InvitationCreateRequest(
+        staff_name="직원", hourly_wage=12000, tax_type="3.3",
+    ))
+    assert invitation.tax_type == "3.3"
+    await service.update(
+        store.id, invitation.id, InvitationUpdateRequest(tax_type="ins")
+    )
+    assert invitation.tax_type == "ins"

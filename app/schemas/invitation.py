@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.membership import TaxType
+
 INVITATION_CODE_PATTERN = r"^[A-HJ-NP-Z2-9]{6}$"
 MINIMUM_HOURLY_WAGE_2026 = 10_320
 
@@ -38,6 +40,7 @@ def _reject_duplicate_schedule(
 class InvitationCreateRequest(InvitationSchema):
     staff_name: str = Field(min_length=1, max_length=50)
     hourly_wage: int = Field(ge=MINIMUM_HOURLY_WAGE_2026)
+    tax_type: TaxType = "none"
     schedule: list[InvitationScheduleInput] = Field(
         default_factory=list,
         max_length=140,
@@ -60,6 +63,7 @@ class InvitationCreateRequest(InvitationSchema):
 
 
 class InvitationUpdateRequest(InvitationSchema):
+    tax_type: TaxType | None = None
     staff_name: str | None = Field(default=None, min_length=1, max_length=50)
     hourly_wage: int | None = Field(default=None, ge=MINIMUM_HOURLY_WAGE_2026)
     schedule: list[InvitationScheduleInput] | None = Field(
@@ -92,6 +96,8 @@ class InvitationUpdateRequest(InvitationSchema):
             raise ValueError("staffName must not be null")
         if "hourly_wage" in self.model_fields_set and self.hourly_wage is None:
             raise ValueError("hourlyWage must not be null")
+        if "tax_type" in self.model_fields_set and self.tax_type is None:
+            raise ValueError("taxType must not be null")
         if "schedule" in self.model_fields_set and self.schedule is None:
             raise ValueError("schedule must not be null")
         return self
@@ -103,6 +109,7 @@ class InvitationResponse(InvitationSchema):
     code: str
     staff_name: str
     hourly_wage: int
+    tax_type: TaxType
     schedule: list[InvitationScheduleInput]
     created_at: datetime
 
