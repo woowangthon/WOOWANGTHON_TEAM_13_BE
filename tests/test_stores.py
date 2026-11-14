@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -39,6 +40,7 @@ class StubStoreService:
         self.store = Store(
             id=uuid4(),
             owner_id=owner_id,
+            created_at=datetime(2026, 11, 1, 15, tzinfo=UTC),
             name="우왕 카페 강남점",
             address="서울특별시 강남구 테헤란로 123",
             business_verification_id=101,
@@ -64,6 +66,7 @@ class StubStoreService:
         self.store = Store(
             id=uuid4(),
             owner_id=owner_id,
+            created_at=datetime(2026, 11, 1, 15, tzinfo=UTC),
             name=request.name,
             address=request.address,
             business_verification_id=request.business_verification_id,
@@ -149,6 +152,7 @@ def test_create_store_uses_camel_case_contract() -> None:
     assert response.status_code == 201
     assert response.json() == {
         "storeId": str(store_service.store.id),
+        "createdAt": "2026-11-01T15:00:00Z",
         "name": "새 매장",
         "address": "서울특별시 마포구 1",
         "ownerName": "홍길동",
@@ -218,6 +222,7 @@ def test_list_stores_returns_wrapper() -> None:
 
     assert response.status_code == 200
     assert response.json()["stores"][0]["storeId"] == str(store_service.store.id)
+    assert response.json()["stores"][0]["createdAt"] == "2026-11-01T15:00:00Z"
 
 
 def test_get_store_detail() -> None:
@@ -226,6 +231,7 @@ def test_get_store_detail() -> None:
     response = client.get(f"/api/v1/stores/{store_service.store.id}")
 
     assert response.status_code == 200
+    assert response.json()["createdAt"] == "2026-11-01T15:00:00Z"
     assert response.json()["name"] == "우왕 카페 강남점"
     assert response.json()["ownerName"] == "홍길동"
 
