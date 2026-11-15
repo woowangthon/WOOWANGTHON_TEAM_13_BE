@@ -237,6 +237,72 @@ async def test_create_store_rejects_business_number_used_by_active_store() -> No
 
 
 @pytest.mark.asyncio
+async def test_create_store_allows_reusable_demo_number_multiple_times() -> None:
+    owner_id = uuid4()
+    existing = make_store(
+        uuid4(),
+        business_verification_id=100,
+        business_registration_number="0000000000",
+    )
+    repository = FakeStoreRepository([existing])
+    service = make_service(
+        repository,
+        [
+            make_verification(
+                owner_id,
+                verification_id=202,
+                business_registration_number="0000000000",
+            )
+        ],
+    )
+
+    created = await service.create(
+        owner_id,
+        StoreCreateRequest(
+            name="새 테스트 카페",
+            address="서울특별시 마포구",
+            businessVerificationId=202,
+        ),
+    )
+
+    assert created.business_registration_number == "0000000000"
+    assert repository.stores == [existing, created]
+
+
+@pytest.mark.asyncio
+async def test_create_store_rejects_non_reusable_demo_number() -> None:
+    owner_id = uuid4()
+    existing = make_store(
+        uuid4(),
+        business_verification_id=100,
+        business_registration_number="1111111111",
+    )
+    repository = FakeStoreRepository([existing])
+    service = make_service(
+        repository,
+        [
+            make_verification(
+                owner_id,
+                verification_id=202,
+                business_registration_number="1111111111",
+            )
+        ],
+    )
+
+    with pytest.raises(BusinessRegistrationNumberAlreadyUsedError):
+        await service.create(
+            owner_id,
+            StoreCreateRequest(
+                name="새 테스트 카페",
+                address="서울특별시 마포구",
+                businessVerificationId=202,
+            ),
+        )
+
+    assert repository.stores == [existing]
+
+
+@pytest.mark.asyncio
 async def test_create_store_allows_number_from_deleted_store() -> None:
     owner_id = uuid4()
     deleted = make_store(
