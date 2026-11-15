@@ -42,10 +42,14 @@ class Store(Base):
             "business_registration_number",
             unique=True,
             postgresql_where=text(
-                "deleted_at IS NULL AND business_registration_number IS NOT NULL"
+                "deleted_at IS NULL "
+                "AND business_registration_number IS NOT NULL "
+                "AND business_registration_number <> '0000000000'"
             ),
             sqlite_where=text(
-                "deleted_at IS NULL AND business_registration_number IS NOT NULL"
+                "deleted_at IS NULL "
+                "AND business_registration_number IS NOT NULL "
+                "AND business_registration_number <> '0000000000'"
             ),
         ),
     )

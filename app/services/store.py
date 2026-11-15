@@ -8,7 +8,10 @@ from app.models.business_verification import BusinessVerification
 from app.models.schedule import ShiftTemplate
 from app.models.store import Store
 from app.schemas.store import StoreCreateRequest, StoreUpdateRequest
-from app.services.business_verification import VERIFIED_STATUS
+from app.services.business_verification import (
+    REUSABLE_DEMO_BUSINESS_REGISTRATION_NUMBERS,
+    VERIFIED_STATUS,
+)
 
 
 class StoreNotFoundError(Exception):
@@ -191,6 +194,11 @@ class StoreService:
         *,
         exclude_store_id: UUID | None = None,
     ) -> None:
+        if (
+            business_registration_number
+            in REUSABLE_DEMO_BUSINESS_REGISTRATION_NUMBERS
+        ):
+            return
         if await self._repository.exists_active_by_business_registration_number(
             business_registration_number,
             exclude_store_id=exclude_store_id,

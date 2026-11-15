@@ -133,3 +133,40 @@ def test_unique_index_allows_deleted_store_but_rejects_two_active(
 
     with pytest.raises(IntegrityError):
         session.commit()
+
+
+def test_unique_index_allows_two_active_stores_for_reusable_demo_number(
+    session: Session,
+) -> None:
+    owner = make_owner(session)
+    verification1 = make_verification(
+        owner,
+        verification_id=1,
+        business_registration_number="0000000000",
+    )
+    verification2 = make_verification(
+        owner,
+        verification_id=2,
+        business_registration_number="0000000000",
+    )
+    first = Store(
+        id=uuid4(),
+        owner_id=owner.id,
+        name="테스트 매장 1",
+        address="서울",
+        business_verification_id=verification1.id,
+        business_registration_number="0000000000",
+    )
+    second = Store(
+        id=uuid4(),
+        owner_id=owner.id,
+        name="테스트 매장 2",
+        address="부산",
+        business_verification_id=verification2.id,
+        business_registration_number="0000000000",
+    )
+    session.add_all([verification1, verification2, first, second])
+
+    session.commit()
+
+    assert session.query(Store).filter(Store.deleted_at.is_(None)).count() == 2

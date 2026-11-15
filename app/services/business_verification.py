@@ -15,6 +15,7 @@ DEMO_BUSINESS_REGISTRATION_NUMBERS = frozenset(
         "1111111111",
     }
 )
+REUSABLE_DEMO_BUSINESS_REGISTRATION_NUMBERS = frozenset({"0000000000"})
 
 
 class BusinessVerificationNotFoundError(Exception):
